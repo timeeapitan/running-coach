@@ -1,0 +1,22 @@
+# User data — personal info, Strava credentials, ML models
+user_data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.python-version
+
+# Environment
+.env
+*.env
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
