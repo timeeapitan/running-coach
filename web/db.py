@@ -9,7 +9,7 @@ import json, os
 from datetime import datetime
 from typing import Optional, Any
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 USE_DB = bool(SUPABASE_URL and SUPABASE_KEY)
 
