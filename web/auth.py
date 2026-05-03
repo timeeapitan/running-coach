@@ -30,17 +30,21 @@ CLIENT_SECRET = os.environ.get("STRAVA_CLIENT_SECRET", "")
 
 def get_redirect_uri():
     """
-    Build the callback URL from the current request host.
-    This works automatically on localhost, Render, Railway, or any host.
+    Build the callback URL. Uses RENDER_EXTERNAL_URL env var on Render
+    (which is always https), falls back to request host for local dev.
     """
+    # Render sets this automatically — always https, always correct
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if render_url:
+        return f"{render_url}/auth/callback"
+
+    # Local development — use request host
     from flask import request as flask_request
     try:
-        # Use the actual incoming request host — works everywhere
-        base = flask_request.host_url.rstrip("/")
+        host = flask_request.host  # e.g. localhost:5000
+        return f"http://{host}/auth/callback"
     except RuntimeError:
-        # Fallback when called outside a request context
-        base = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:5000")
-    return f"{base}/auth/callback"
+        return "http://localhost:5000/auth/callback"
 
 
 def login_required(f):

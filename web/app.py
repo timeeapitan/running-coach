@@ -65,6 +65,8 @@ def auth_callback():
     try:
         token_data = exchange_code(code)
     except Exception as e:
+        import traceback
+        print("STRAVA EXCHANGE ERROR:", traceback.format_exc())
         return render_template("login.html", configured=is_configured(),
                                client_id=CLIENT_ID,
                                error=f"Could not connect to Strava: {e}")
@@ -86,8 +88,15 @@ def auth_callback():
     clean_token["client_id"]     = os.environ.get("STRAVA_CLIENT_ID", "")
     clean_token["client_secret"] = os.environ.get("STRAVA_CLIENT_SECRET", "")
 
-    save_strava_token(athlete_id, clean_token,
-                      display_name=name, athlete_data=athlete)
+    try:
+        save_strava_token(athlete_id, clean_token,
+                          display_name=name, athlete_data=athlete)
+    except Exception as e:
+        import traceback
+        print("SUPABASE SAVE ERROR:", traceback.format_exc())
+        return render_template("login.html", configured=is_configured(),
+                               client_id=CLIENT_ID,
+                               error=f"Database error: {e} — Have you run setup_db.sql in Supabase?")
 
     # Create a default profile if this is their first login
     if not load_profile(athlete_id):
