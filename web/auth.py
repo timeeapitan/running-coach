@@ -29,11 +29,17 @@ CLIENT_SECRET = os.environ.get("STRAVA_CLIENT_SECRET", "")
 
 
 def get_redirect_uri():
-    """Build the callback URL dynamically from the current request host."""
-    if os.environ.get("RENDER_EXTERNAL_URL"):
-        base = os.environ["RENDER_EXTERNAL_URL"].rstrip("/")
-    else:
-        base = "http://localhost:5000"
+    """
+    Build the callback URL from the current request host.
+    This works automatically on localhost, Render, Railway, or any host.
+    """
+    from flask import request as flask_request
+    try:
+        # Use the actual incoming request host — works everywhere
+        base = flask_request.host_url.rstrip("/")
+    except RuntimeError:
+        # Fallback when called outside a request context
+        base = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:5000")
     return f"{base}/auth/callback"
 
 
