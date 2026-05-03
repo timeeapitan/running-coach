@@ -14,9 +14,21 @@
   <a href="/" class="nav-brand">Running Coach</a>
   <a href="/"        class="{{ 'active' if request.path == '/' }}">Dashboard</a>
   <a href="/history" class="{{ 'active' if request.path == '/history' }}">History</a>
+  <a href="/insights"class="{{ 'active' if request.path == '/insights' }}">Insights</a>
   <a href="/log"     class="{{ 'active' if request.path == '/log' }}">Log</a>
-  <a href="/insights" class="{{ 'active' if request.path == '/insights' }}">Insights</a>
   <a href="/race"    class="{{ 'active' if request.path == '/race' }}">Race</a>
+
+  <div style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:0 0 0 12px;">
+    {% if user_avatar %}
+    <img src="{{ user_avatar }}" alt="{{ user_name }}"
+         style="width:28px;height:28px;border-radius:50%;object-fit:cover;border:1.5px solid var(--c-border);">
+    {% endif %}
+    <span style="font-size:13px;color:var(--c-muted);max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+      {{ user_name }}
+    </span>
+    <a href="/setup" style="font-size:12px;color:var(--c-muted);text-decoration:none;padding:0 4px;">⚙</a>
+    <a href="/logout" style="font-size:12px;color:var(--c-muted);text-decoration:none;padding:4px 8px;border:0.5px solid var(--c-border);border-radius:var(--radius-sm);">Sign out</a>
+  </div>
 </nav>
 <div class="page">
   {% block content %}{% endblock %}

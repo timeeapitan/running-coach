@@ -7,7 +7,16 @@ services:
     envVars:
       - key: SECRET_KEY
         generateValue: true
-    disk:
-      name: user-data
-      mountPath: /app/user_data
-      sizeGB: 1
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: STRAVA_CLIENT_ID
+        sync: false
+      - key: STRAVA_CLIENT_SECRET
+        sync: false
+      - key: RENDER_EXTERNAL_URL
+        fromService:
+          type: web
+          name: running-coach
+          property: host

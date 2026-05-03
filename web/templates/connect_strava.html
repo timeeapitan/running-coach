@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Connect Strava — Running Coach{% endblock %}
+{% block content %}
+
+{% if already_connected %}
+<div class="card" style="border-left:3px solid var(--c-teal);border-radius:0 var(--border-radius-md) var(--border-radius-md) 0;">
+  <p style="color:var(--c-teal);font-weight:500;margin-bottom:4px;">Strava is connected</p>
+  <p style="font-size:13px;color:var(--c-muted);">Your runs are loading automatically. <a href="/" style="color:var(--c-teal);">Go to dashboard →</a></p>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-title">Connect your Strava account</div>
+  <p style="font-size:13px;color:var(--c-muted);margin-bottom:1.25rem;">
+    This lets the app pull your runs automatically — no CSV exports needed.
+    You need a free Strava API app first (takes 2 minutes).
+  </p>
+
+  <div style="background:var(--c-bg);border-radius:var(--border-radius-md);padding:1rem;margin-bottom:1.25rem;font-size:13px;">
+    <strong style="display:block;margin-bottom:8px;">Step 1 — Create a free Strava API app</strong>
+    <ol style="padding-left:1.2rem;color:var(--c-muted);line-height:2;">
+      <li>Go to <a href="https://www.strava.com/settings/api" target="_blank" style="color:var(--c-teal);">strava.com/settings/api</a></li>
+      <li>Fill in: Name = <code>Running Coach</code> &nbsp;·&nbsp; Category = Other &nbsp;·&nbsp; Website = <code>http://localhost</code></li>
+      <li>Authorization Callback Domain = <strong>{{ request.host }}</strong></li>
+      <li>Click Create — you'll see a Client ID and Client Secret</li>
+    </ol>
+  </div>
+
+  <div style="background:var(--c-bg);border-radius:var(--border-radius-md);padding:1rem;margin-bottom:1.25rem;">
+    <strong style="display:block;font-size:13px;margin-bottom:10px;">Step 2 — Enter your credentials</strong>
+    <form id="strava-form">
+      <div class="form-group">
+        <label>Client ID</label>
+        <input type="text" id="client-id" placeholder="e.g. 12345" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Client Secret</label>
+        <input type="text" id="client-secret" placeholder="long string from Strava" autocomplete="off">
+      </div>
+      <button type="button" class="btn btn-primary" onclick="connectStrava()">
+        Connect Strava
+      </button>
+    </form>
+  </div>
+</div>
+
+<script>
+function connectStrava() {
+  const clientId     = document.getElementById('client-id').value.trim();
+  const clientSecret = document.getElementById('client-secret').value.trim();
+  if (!clientId || !clientSecret) {
+    alert('Please enter both Client ID and Client Secret.');
+    return;
+  }
+  const redirectUri = window.location.origin + '/connect-strava/callback';
+  const state       = clientId + ':' + clientSecret;
+  const params = new URLSearchParams({
+    client_id:     clientId,
+    redirect_uri:  redirectUri,
+    response_type: 'code',
+    scope:         'activity:read_all',
+    state:         state,
+  });
+  window.location.href = 'https://www.strava.com/oauth/authorize?' + params.toString();
+}
+</script>
+{% endblock %}

@@ -1,26 +1,24 @@
 """
-Running Coach — Flask web application.
-
-Routes:
-  GET  /          Dashboard: status + next run + Garmin steps + PRs
-  GET  /history   Run history + pace trend + zone 2 drift + weekly chart
-  GET  /insights  Injury risk + race predictor
-  GET  /log       Feedback form
-  POST /log       Save feedback
-  GET  /race      Race goal + periodised training plan
-  POST /race      Save race goal
-  GET  /setup     Profile editor
-  POST /setup     Save profile
-  GET  /api/status JSON health check
+Running Coach — Flask web application with Strava authentication.
 """
 
-import json, os, sys
+import json, os, sys, tempfile, time
 from datetime import datetime, timedelta
-from flask import Flask, render_template, request, redirect, url_for, jsonify, session
+from flask import (Flask, render_template, request, redirect,
+                   url_for, jsonify, session, abort)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+from web.auth import (
+    login_required, current_user_id, current_user_name, current_user_avatar,
+    build_auth_url, exchange_code, refresh_token, is_configured, CLIENT_ID
+)
+from web.db import (
+    load_profile, save_profile, load_strava_token, save_strava_token,
+    load_feedback, save_feedback_entry, list_users, load_athlete_info, USE_DB,
+    load_cached_summary, save_cached_summary,
+)
 from running_coach.schemas.profile  import RunnerProfile
 from running_coach.schemas.feedback import ManualFeedback
 from running_coach.coaching.coach   import RunningCoach
@@ -30,94 +28,193 @@ from running_coach.analysis.insights import (
 )
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "running-coach-dev-key")
+app.secret_key = os.environ.get("SECRET_KEY", "running-coach-dev-key-change-me")
 
-DATA_DIR = os.path.join(ROOT, "user_data")
-os.makedirs(DATA_DIR, exist_ok=True)
+_MODEL_CACHE = {}
+
+
+# ── Auth routes ───────────────────────────────────────────────────────────────
+
+@app.route("/login")
+def login():
+    if session.get("user_id"):
+        return redirect(url_for("dashboard"))
+    return render_template("login.html", configured=is_configured(),
+                           client_id=CLIENT_ID)
+
+
+@app.route("/auth/callback-start")
+def auth_callback_start():
+    """Redirect the browser to Strava auth page."""
+    return redirect(build_auth_url())
+
+
+@app.route("/auth/callback")
+def auth_callback():
+    """Strava redirects here after the user clicks Allow."""
+    error = request.args.get("error")
+    if error:
+        return render_template("login.html", configured=is_configured(),
+                               client_id=CLIENT_ID,
+                               error="Strava authorization was denied. Please try again.")
+
+    code = request.args.get("code")
+    if not code:
+        return redirect(url_for("login"))
+
+    try:
+        token_data = exchange_code(code)
+    except Exception as e:
+        return render_template("login.html", configured=is_configured(),
+                               client_id=CLIENT_ID,
+                               error=f"Could not connect to Strava: {e}")
+
+    athlete     = token_data.get("athlete", {})
+    athlete_id  = str(athlete.get("id", ""))
+    if not athlete_id:
+        return render_template("login.html", configured=is_configured(),
+                               client_id=CLIENT_ID,
+                               error="Could not get athlete ID from Strava.")
+
+    first  = athlete.get("firstname", "")
+    last   = athlete.get("lastname",  "")
+    name   = f"{first} {last}".strip() or athlete_id
+    avatar = athlete.get("profile_medium", "")
+
+    # Strip athlete info from token before storing
+    clean_token = {k: v for k, v in token_data.items() if k != "athlete"}
+    clean_token["client_id"]     = os.environ.get("STRAVA_CLIENT_ID", "")
+    clean_token["client_secret"] = os.environ.get("STRAVA_CLIENT_SECRET", "")
+
+    save_strava_token(athlete_id, clean_token,
+                      display_name=name, athlete_data=athlete)
+
+    # Create a default profile if this is their first login
+    if not load_profile(athlete_id):
+        from running_coach.schemas.enums import FitnessLevel
+        import dataclasses
+        p = RunnerProfile(name=name, fitness_level=FitnessLevel.INTERMEDIATE,
+                          runs_per_week=3)
+        d = dataclasses.asdict(p)
+        d["fitness_level"] = p.fitness_level.value
+        save_profile(athlete_id, d)
+
+    # Set session
+    session.permanent   = True
+    session["user_id"]  = athlete_id
+    session["user_name"]= name
+    session["user_avatar"] = avatar
+
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _user_dir(u):
-    safe = "".join(c for c in u.lower() if c.isalnum() or c == "_")
-    d = os.path.join(DATA_DIR, safe)
-    os.makedirs(os.path.join(d, "models"), exist_ok=True)
-    return d
+def _get_profile(uid) -> RunnerProfile:
+    d = load_profile(uid)
+    if not d:
+        return None
+    from running_coach.schemas.enums import FitnessLevel
+    d["fitness_level"] = FitnessLevel(d.get("fitness_level", "intermediate"))
+    return RunnerProfile(**{k: v for k, v in d.items()
+                            if k in RunnerProfile.__dataclass_fields__})
 
-def _profile_path(u):  return os.path.join(_user_dir(u), "profile.json")
-def _model_dir(u):     return os.path.join(_user_dir(u), "models")
-def _token_path(u):    return os.path.join(_user_dir(u), "strava_token.json")
-def _feedback_path(u): return os.path.join(_user_dir(u), "feedback.json")
-def _current_user():   return session.get("user", "me")
+def _save_profile_obj(uid, profile: RunnerProfile):
+    import dataclasses
+    d = dataclasses.asdict(profile)
+    d["fitness_level"] = profile.fitness_level.value
+    save_profile(uid, d)
 
-def _load_profile(u):
-    p = _profile_path(u)
-    return RunnerProfile.load(p) if os.path.exists(p) else None
+def _get_model_dir(uid):
+    if uid not in _MODEL_CACHE:
+        _MODEL_CACHE[uid] = tempfile.mkdtemp(prefix=f"rc_{uid}_")
+    return _MODEL_CACHE[uid]
 
-def _load_feedback(u) -> dict:
-    p = _feedback_path(u)
-    if not os.path.exists(p):
-        return {}
-    with open(p) as f:
-        raw = json.load(f)
-    result = {}
-    for key, val in raw.items():
-        val["date"] = datetime.fromisoformat(val["date"])
-        result[key] = ManualFeedback(**{k: v for k, v in val.items()
-                                        if k in ManualFeedback.__dataclass_fields__})
-    return result
+def _load_runs(uid):
+    token = load_strava_token(uid)
+    if not token:
+        return []
 
-def _save_feedback(u, feedback: dict):
-    out = {}
-    for key, fb in feedback.items():
-        out[key] = {
-            "date": fb.date.isoformat(), "rpe": fb.rpe, "mood": fb.mood,
-            "sleep_hours": fb.sleep_hours, "sleep_quality": fb.sleep_quality,
-            "hrv_ms": fb.hrv_ms, "pain_flag": fb.pain_flag,
-            "pain_location": fb.pain_location, "notes": fb.notes,
-        }
-        out[key] = {k: v for k, v in out[key].items() if v is not None}
-        out[key]["date"] = fb.date.isoformat()
-        out[key]["pain_flag"] = fb.pain_flag
-    with open(_feedback_path(u), "w") as f:
-        json.dump(out, f, indent=2)
-
-def _load_runs(u):
-    tp = _token_path(u)
-    if os.path.exists(tp):
-        from running_coach.parsers.strava import StravaParser
+    # Auto-refresh token if expired
+    if token.get("expires_at", 0) < time.time() + 300:
         try:
-            return StravaParser(tp).fetch_runs()
+            token = refresh_token(token)
+            save_strava_token(uid, token)
         except Exception:
             pass
-    return []
 
-def _get_coach(u, profile):
-    return RunningCoach(profile, model_dir=_model_dir(u))
+    tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w")
+    json.dump(token, tmp); tmp.close()
+    try:
+        from running_coach.parsers.strava import StravaParser
+        runs = StravaParser(tmp.name).fetch_runs()
+        return runs
+    except Exception:
+        return []
+    finally:
+        os.unlink(tmp.name)
 
-def _fmt_pace(pace_float):
-    if not pace_float: return "—"
-    m = int(pace_float)
-    s = int((pace_float % 1) * 60)
-    return f"{m}:{s:02d}/km"
+def _get_coach(uid, profile):
+    return RunningCoach(profile, model_dir=_get_model_dir(uid))
+
+def _fmt_pace(p):
+    if not p: return "—"
+    return f"{int(p)}:{int((p%1)*60):02d}/km"
+
+def _compute_prs(runs):
+    if not runs: return {}
+    wp = [r for r in runs if r.avg_pace_min_per_km]
+    we = [r for r in runs if r.elevation_gain_m]
+    return {
+        "longest_km":       round(max(r.distance_km for r in runs), 1),
+        "fastest_pace_str": _fmt_pace(min(r.avg_pace_min_per_km for r in wp)) if wp else None,
+        "most_elev":        int(max(r.elevation_gain_m for r in we)) if we else None,
+        "total_runs":       len(runs),
+        "total_km":         round(sum(r.distance_km for r in runs), 1),
+    }
+
+def _weekly_summary(runs, weeks=8):
+    now = datetime.now()
+    result = []
+    for w in range(weeks-1, -1, -1):
+        start = now - timedelta(weeks=w+1)
+        end   = now - timedelta(weeks=w)
+        wr    = [r for r in runs if start <= r.date < end]
+        hrs   = [r.avg_hr for r in wr if r.avg_hr]
+        result.append({
+            "label": start.strftime("%d %b"),
+            "km":    round(sum(r.distance_km for r in wr), 1),
+            "runs":  len(wr),
+            "avg_hr":round(sum(hrs)/len(hrs), 0) if hrs else 0,
+        })
+    return result
 
 
-# ── Pages ─────────────────────────────────────────────────────────────────────
+# ── App pages (all protected) ─────────────────────────────────────────────────
 
 @app.route("/")
+@login_required
 def dashboard():
-    u        = _current_user()
-    profile  = _load_profile(u)
+    uid      = current_user_id()
+    profile  = _get_profile(uid)
     if not profile:
         return redirect(url_for("setup"))
 
-    runs     = _load_runs(u)
-    feedback = _load_feedback(u)
-    coach    = _get_coach(u, profile)
+    runs     = _load_runs(uid)
+    feedback = load_feedback(uid)
+    coach    = _get_coach(uid, profile)
 
     if not runs:
-        return render_template("dashboard.html", profile=profile,
-            error="No runs found. Connect Strava or complete setup.", no_runs=True)
+        return render_template("dashboard.html",
+            profile=profile, error="No runs found on Strava yet.",
+            no_runs=True, user_name=current_user_name(),
+            user_avatar=current_user_avatar())
 
     if len(runs) >= 10 and not coach.trainer.fatigue_predictor.is_trained:
         coach.train_models(runs)
@@ -127,68 +224,74 @@ def dashboard():
            if len(runs) >= NextRunPredictor.MIN_RUNS_FOR_PERSONALISATION
            else coach.recommend(analysis))
 
+    from running_coach.analysis.daily_summary import build_daily_summary
+
+    # Try to load today's cached summary first
+    summary = load_cached_summary(uid)
+    if summary is None:
+        # Not cached yet today — compute and store it
+        summary = build_daily_summary(runs, profile, analysis, rec, feedback)
+        save_cached_summary(uid, summary)
+
     return render_template("dashboard.html",
         profile=profile, analysis=analysis, recommendation=rec,
         zones=profile.get_hr_zones(), prs=_compute_prs(runs),
         weeks_to_race=profile.weeks_to_race(), run_count=len(runs),
         ml_active=coach.trainer.fatigue_predictor.is_trained,
+        summary=summary,
         no_runs=False, error=None,
-    )
+        user_name=current_user_name(), user_avatar=current_user_avatar())
 
 
 @app.route("/history")
+@login_required
 def history():
-    u       = _current_user()
-    profile = _load_profile(u)
+    uid     = current_user_id()
+    profile = _get_profile(uid)
     if not profile: return redirect(url_for("setup"))
-
-    runs = _load_runs(u)
+    runs = _load_runs(uid)
     if not runs:
         return render_template("history.html", profile=profile,
-            runs=[], chart_data="[]", weekly="[]", drift={})
-
+            runs=[], chart_data="[]", weekly="[]", drift={},
+            user_name=current_user_name(), user_avatar=current_user_avatar())
     recent = sorted(runs, key=lambda r: r.date, reverse=True)[:60]
     chart_data = [
-        {"date": r.date.strftime("%d %b"), "pace": round(r.avg_pace_min_per_km,2)
-         if r.avg_pace_min_per_km else None,
-         "hr": int(r.avg_hr) if r.avg_hr else None,
+        {"date": r.date.strftime("%d %b"),
+         "pace": round(r.avg_pace_min_per_km,2) if r.avg_pace_min_per_km else None,
+         "hr":   int(r.avg_hr) if r.avg_hr else None,
          "distance": round(r.distance_km,1)}
         for r in reversed(recent)
     ]
-    weekly  = _weekly_summary(runs, 8)
-    drift   = zone2_drift(runs, profile)
-
     return render_template("history.html",
         profile=profile, runs=recent,
         chart_data=json.dumps(chart_data),
-        weekly=json.dumps(weekly),
-        drift=drift, zones=profile.get_hr_zones(),
-    )
+        weekly=json.dumps(_weekly_summary(runs, 8)),
+        drift=zone2_drift(runs, profile),
+        zones=profile.get_hr_zones(),
+        user_name=current_user_name(), user_avatar=current_user_avatar())
 
 
 @app.route("/insights")
+@login_required
 def insights():
-    u       = _current_user()
-    profile = _load_profile(u)
+    uid     = current_user_id()
+    profile = _get_profile(uid)
     if not profile: return redirect(url_for("setup"))
-
-    runs = _load_runs(u)
-    risk = injury_risk(runs, profile) if runs else {"score":0,"level":"unknown","factors":{},"advice":[]}
-
-    race_pred = None
-    if profile.race_distance_km and runs:
-        race_pred = predict_race_time(runs, profile, profile.race_distance_km)
-
+    runs  = _load_runs(uid)
+    risk  = injury_risk(runs, profile) if runs else \
+            {"score":0,"level":"unknown","factors":{},"advice":[]}
+    pred  = (predict_race_time(runs, profile, profile.race_distance_km)
+             if profile.race_distance_km and runs else None)
     return render_template("insights.html",
-        profile=profile, risk=risk, race_pred=race_pred,
-        runs_count=len(runs),
-    )
+        profile=profile, risk=risk, race_pred=pred, runs_count=len(runs),
+        user_name=current_user_name(), user_avatar=current_user_avatar())
 
 
 @app.route("/log", methods=["GET", "POST"])
+@login_required
 def log_feedback():
-    u       = _current_user()
-    profile = _load_profile(u)
+    uid     = current_user_id()
+    profile = _get_profile(uid)
     if not profile: return redirect(url_for("setup"))
 
     if request.method == "POST":
@@ -206,45 +309,43 @@ def log_feedback():
             pain_location=f.get("pain_location","").strip() or None,
             notes=f.get("notes","").strip() or None,
         )
-        feedback = _load_feedback(u)
-        feedback[date] = fb
-        _save_feedback(u, feedback)
+        save_feedback_entry(uid, date, fb)
         return redirect(url_for("dashboard"))
 
-    feedback = _load_feedback(u)
+    feedback = load_feedback(uid)
     recent   = sorted(feedback.values(), key=lambda x: x.date, reverse=True)[:7]
     return render_template("log.html", profile=profile,
-        recent_feedback=recent, today=datetime.now().date().isoformat())
+        recent_feedback=recent, today=datetime.now().date().isoformat(),
+        user_name=current_user_name(), user_avatar=current_user_avatar())
 
 
 @app.route("/race", methods=["GET", "POST"])
+@login_required
 def race():
-    u       = _current_user()
-    profile = _load_profile(u)
+    uid     = current_user_id()
+    profile = _get_profile(uid)
     if not profile: return redirect(url_for("setup"))
-
     if request.method == "POST":
         f = request.form
         profile.race_date              = f.get("race_date") or None
         profile.race_distance_km       = float(f.get("race_distance_km") or 0) or None
         profile.race_goal_time_minutes = float(f.get("race_goal_minutes") or 0) or None
-        profile.save(_profile_path(u))
+        _save_profile_obj(uid, profile)
         return redirect(url_for("race"))
-
-    runs = _load_runs(u)
+    runs = _load_runs(uid)
     plan = generate_race_plan(profile, runs) if profile.race_date else None
     pred = (predict_race_time(runs, profile, profile.race_distance_km)
             if profile.race_distance_km and runs else None)
-
     return render_template("race.html",
         profile=profile, plan=plan, pred=pred,
         weeks_to_race=profile.weeks_to_race(), fmt_pace=_fmt_pace,
-    )
+        user_name=current_user_name(), user_avatar=current_user_avatar())
 
 
 @app.route("/setup", methods=["GET", "POST"])
+@login_required
 def setup():
-    u = _current_user()
+    uid = current_user_id()
     if request.method == "POST":
         f = request.form
         def _i(k): v=f.get(k,"").strip(); return int(v) if v.isdigit() else None
@@ -253,56 +354,55 @@ def setup():
             try: return float(v)
             except: return None
         from running_coach.schemas.enums import FitnessLevel
-        p = RunnerProfile(
-            name=f.get("name","Runner").strip(), age=_i("age"),
-            max_hr=_i("max_hr"), resting_hr=_i("resting_hr"),
+        profile = RunnerProfile(
+            name=f.get("name", current_user_name()).strip(),
+            age=_i("age"), max_hr=_i("max_hr"), resting_hr=_i("resting_hr"),
             runs_per_week=_i("runs_per_week") or 3,
             fitness_level=FitnessLevel(f.get("fitness_level","intermediate")),
             goal_weekly_km=_f("goal_weekly_km"),
         )
-        p.save(_profile_path(u))
+        _save_profile_obj(uid, profile)
+        return redirect(url_for("dashboard"))
+    return render_template("setup.html", profile=_get_profile(uid),
+        user_name=current_user_name(), user_avatar=current_user_avatar())
+
+
+@app.route("/refresh")
+@login_required
+def refresh_summary():
+    """Force-recalculate today's summary — called after logging a new run."""
+    from web.db import save_cached_summary
+    from running_coach.analysis.daily_summary import build_daily_summary
+
+    uid      = current_user_id()
+    profile  = _get_profile(uid)
+    if not profile:
         return redirect(url_for("dashboard"))
 
-    return render_template("setup.html", profile=_load_profile(u))
+    runs     = _load_runs(uid)
+    feedback = load_feedback(uid)
+    coach    = _get_coach(uid, profile)
+    analysis = coach.analyze(runs, feedback)
+
+    from running_coach.ml.models.next_run_predictor import NextRunPredictor
+    rec = (coach.predict_next_run(runs, feedback)
+           if len(runs) >= NextRunPredictor.MIN_RUNS_FOR_PERSONALISATION
+           else coach.recommend(analysis))
+
+    summary = build_daily_summary(runs, profile, analysis, rec, feedback)
+    save_cached_summary(uid, summary)  # overwrites today's cache
+
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/api/status")
 def api_status():
-    u    = _current_user()
-    prof = _load_profile(u)
-    return jsonify({"profile": bool(prof), "strava": os.path.exists(_token_path(u))})
-
-
-# ── Business logic ────────────────────────────────────────────────────────────
-
-def _compute_prs(runs):
-    if not runs: return {}
-    with_pace = [r for r in runs if r.avg_pace_min_per_km]
-    with_elev = [r for r in runs if r.elevation_gain_m]
-    return {
-        "longest_km":   round(max(r.distance_km for r in runs), 1),
-        "fastest_pace": min(r.avg_pace_min_per_km for r in with_pace) if with_pace else None,
-        "fastest_pace_str": _fmt_pace(min(r.avg_pace_min_per_km for r in with_pace)) if with_pace else None,
-        "most_elev":    int(max(r.elevation_gain_m for r in with_elev)) if with_elev else None,
-        "total_runs":   len(runs),
-        "total_km":     round(sum(r.distance_km for r in runs), 1),
-    }
-
-def _weekly_summary(runs, weeks=8):
-    now = datetime.now()
-    result = []
-    for w in range(weeks-1, -1, -1):
-        start = now - timedelta(weeks=w+1)
-        end   = now - timedelta(weeks=w)
-        wr    = [r for r in runs if start <= r.date < end]
-        hrs   = [r.avg_hr for r in wr if r.avg_hr]
-        result.append({
-            "label":  start.strftime("%d %b"),
-            "km":     round(sum(r.distance_km for r in wr), 1),
-            "runs":   len(wr),
-            "avg_hr": round(sum(hrs)/len(hrs), 0) if hrs else 0,
-        })
-    return result
+    uid = current_user_id()
+    return jsonify({
+        "logged_in": bool(uid),
+        "user_id":   uid,
+        "database":  USE_DB,
+    })
 
 
 if __name__ == "__main__":
