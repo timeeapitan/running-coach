@@ -79,8 +79,7 @@
   </div>
   {% endif %}
 
-  <!-- Change 6: recalculate button -->
-  <a href="/refresh" class="btn-recalc">Recalculate after a new run</a>
+  <a href="/refresh" class="btn btn-secondary btn-sm" style="display:inline-block;margin-top:10px;font-size:13px;">↻ Recalculate after a new run</a>
 </div>
 {% endif %}
 
@@ -103,27 +102,26 @@
     <span class="bar-val">{{ analysis.readiness_score|int }}/100</span>
   </div>
 
-  <!-- Change 7: ATL/CTL/TSB with tooltips -->
-  <div class="stat-row">
-    {% if analysis.fatigue_factors.atl is defined %}
-    <span class="stat-item">
-      ATL <strong>{{ analysis.fatigue_factors.atl|int }}</strong>
-      <span class="stat-info">?</span>
-      <span class="stat-tooltip">Acute Training Load — how hard you've trained in the last 7 days. High = tired.</span>
-    </span>
-    <span class="stat-item">
-      CTL <strong>{{ analysis.fatigue_factors.ctl|int }}</strong>
-      <span class="stat-info">?</span>
-      <span class="stat-tooltip">Chronic Training Load — your fitness base built over the last 6 weeks. Higher = fitter.</span>
-    </span>
-    <span class="stat-item">
-      TSB <strong>{% if analysis.fatigue_factors.tsb >= 0 %}+{% endif %}{{ analysis.fatigue_factors.tsb|int }}</strong>
-      <span class="stat-info">?</span>
-      <span class="stat-tooltip">Training Stress Balance — CTL minus ATL. Positive = fresh and ready. Negative = fatigued.</span>
-    </span>
-    {% endif %}
-    <span style="color:var(--c-muted);">4-wk avg <strong style="color:var(--c-text);">{{ analysis.average_weekly_volume_km }} km</strong></span>
-    <span style="color:var(--c-muted);">Trend <strong style="color:var(--c-text);">{{ analysis.trend }}</strong></span>
+  <!-- Change 7: ATL/CTL/TSB collapsed by default -->
+  <div style="margin-top:0.85rem;">
+    <details class="stat-details">
+      <summary class="stat-summary">
+        {% if analysis.fatigue_factors.atl is defined %}
+        ATL <strong>{{ analysis.fatigue_factors.atl|int }}</strong>
+        &nbsp;·&nbsp; CTL <strong>{{ analysis.fatigue_factors.ctl|int }}</strong>
+        &nbsp;·&nbsp; TSB <strong>{% if analysis.fatigue_factors.tsb >= 0 %}+{% endif %}{{ analysis.fatigue_factors.tsb|int }}</strong>
+        &nbsp;·&nbsp;
+        {% endif %}
+        4-wk avg <strong>{{ analysis.average_weekly_volume_km }} km</strong>
+        &nbsp;·&nbsp; Trend <strong>{{ analysis.trend }}</strong>
+        <span class="stat-expand-hint">tap for details</span>
+      </summary>
+      <div class="stat-expanded">
+        <div class="stat-def"><strong>ATL</strong> — Acute Training Load. How hard you've trained in the last 7 days. High = tired.</div>
+        <div class="stat-def"><strong>CTL</strong> — Chronic Training Load. Your fitness base built over 6 weeks. Higher = fitter.</div>
+        <div class="stat-def"><strong>TSB</strong> — Training Stress Balance (CTL − ATL). Positive = fresh and race-ready. Negative = fatigued.</div>
+      </div>
+    </details>
   </div>
 </div>
 
@@ -135,21 +133,18 @@
 
 <!-- ── NEXT RUN (changes 2, 3, 9, 13) ── -->
 <div class="rec-box">
-  <div class="rec-type">
-    {{ recommendation.workout_type.value.replace('_',' ') }}
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+    <span style="font-size:20px;font-weight:700;color:var(--c-text);">{{ recommendation.description }}</span>
+    {% if ml_active %}
+    <span class="ml-badge">ML active</span>
+    {% endif %}
     {% if recommendation.terrain and recommendation.terrain != 'road' %}
-    <span style="font-size:11px;background:var(--c-amber-bg);color:var(--c-amber);padding:1px 7px;border-radius:8px;font-weight:500;">
+    <span style="font-size:11px;background:var(--c-amber-bg);color:var(--c-amber);padding:2px 8px;border-radius:8px;font-weight:500;">
       {{ recommendation.terrain }}
     </span>
     {% endif %}
-    <!-- Change 3: ML pill -->
-    {% if ml_active %}
-    <span class="ml-pill">ML personalised</span>
-    {% endif %}
   </div>
-  <!-- Change 2: just the name, no duplicated details -->
-  <div class="rec-title">{{ recommendation.description }}</div>
-  <div class="rec-rationale">{{ recommendation.rationale }}</div>
+  <div style="font-size:13px;color:var(--c-muted);margin-bottom:4px;">{{ recommendation.rationale }}</div>
 
   {% if not recommendation.is_rest %}
   <div class="targets">
@@ -177,19 +172,22 @@
     </div>
   </div>
 
-  <!-- Change 9: structured warm-up/main/cool-down steps -->
+  <!-- Change 9: steps in collapsible section -->
   {% if recommendation.steps %}
-  <div class="run-steps">
-    {% for step in recommendation.steps %}
-    <div class="run-step">
-      <div class="run-step-num">{{ loop.index }}</div>
-      <div class="run-step-body">
-        <div class="run-step-label">{{ step.label }}</div>
-        <div class="run-step-detail">{{ step.detail }}</div>
+  <details class="steps-details">
+    <summary class="steps-summary">See run breakdown ›</summary>
+    <div class="run-steps">
+      {% for step in recommendation.steps %}
+      <div class="run-step">
+        <div class="run-step-num">{{ loop.index }}</div>
+        <div class="run-step-body">
+          <div class="run-step-label">{{ step.label }}</div>
+          <div class="run-step-detail">{{ step.detail }}</div>
+        </div>
       </div>
+      {% endfor %}
     </div>
-    {% endfor %}
-  </div>
+  </details>
   {% endif %}
   {% endif %}
 </div>

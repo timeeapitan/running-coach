@@ -316,8 +316,7 @@ class NextRunPredictor:
         )
         source_str = ""
         if ml_source:
-            using_ml = any("ML" in s for s in ml_source)
-            source_str = " [ML personalised]" if using_ml else " [rule-based]"
+            source_str = ""  # ML status shown as badge in UI, not in text
         return (
             f"Based on your last {len(runs)} runs: {direction}.{source_str} "
             f"Readiness {analysis.readiness_score:.0f}/100, "
