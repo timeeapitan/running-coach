@@ -323,12 +323,12 @@ def load_cached_runs(username: str) -> Optional[list]:
             return None
         cached_at = rows[0].get("cached_at", "")
         if cached_at:
-            from datetime import timezone
-            import re
-            # Parse ISO timestamp
-            ts_str = re.sub(r"+.*$", "", cached_at.replace("Z", ""))
+            # Strip timezone offset cleanly — Supabase returns e.g. "2026-05-11T18:06:00+00:00"
+            ts_str = cached_at.replace("Z", "").split("+")[0].split("-")[0]
+            # Safer: just parse the first 19 characters (YYYY-MM-DDTHH:MM:SS)
+            ts_str = cached_at[:19]
             cached_dt = datetime.fromisoformat(ts_str)
-            age_minutes = (datetime.utcnow() - cached_dt).total_seconds() / 60
+            age_minutes = (datetime.now() - cached_dt).total_seconds() / 60
             if age_minutes > RUNS_CACHE_TTL_MINUTES:
                 return None
         raw = rows[0]["runs"]

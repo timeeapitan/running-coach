@@ -12,7 +12,8 @@ sys.path.insert(0, ROOT)
 
 from web.auth import (
     login_required, current_user_id, current_user_name, current_user_avatar,
-    build_auth_url, exchange_code, refresh_token, is_configured, CLIENT_ID
+    build_auth_url, exchange_code, refresh_token,
+    get_client_credentials, host_credentials_set, get_redirect_uri,
 )
 from web.db import (
     load_profile, save_profile, load_strava_token, save_strava_token,
@@ -40,14 +41,39 @@ _MODEL_CACHE = {}
 def login():
     if session.get("user_id"):
         return redirect(url_for("dashboard"))
-    return render_template("login.html", configured=is_configured(),
-                           client_id=CLIENT_ID)
+    # Pre-fill client_id if user previously entered it
+    prefill_id = session.get("pending_client_id", "")
+    return render_template("login.html",
+        host_credentials=host_credentials_set(),
+        callback_domain=_get_callback_domain(),
+        prefill_id=prefill_id,
+    )
+
+
+@app.route("/auth/credentials", methods=["POST"])
+def auth_credentials():
+    """Step 1: user submits their Strava API credentials."""
+    client_id     = request.form.get("client_id", "").strip()
+    client_secret = request.form.get("client_secret", "").strip()
+    if not client_id or not client_secret:
+        return render_template("login.html",
+            host_credentials=host_credentials_set(),
+            callback_domain=_get_callback_domain(),
+            error="Please enter both Client ID and Client Secret.",
+        )
+    # Store in session temporarily — used by auth_callback_start
+    session["pending_client_id"]     = client_id
+    session["pending_client_secret"] = client_secret
+    return redirect(url_for("auth_callback_start"))
 
 
 @app.route("/auth/callback-start")
 def auth_callback_start():
-    """Redirect the browser to Strava auth page."""
-    return redirect(build_auth_url())
+    """Redirect to Strava using the pending or host credentials."""
+    client_id, _ = get_client_credentials()
+    if not client_id:
+        return redirect(url_for("login"))
+    return redirect(build_auth_url(client_id))
 
 
 @app.route("/auth/callback")
@@ -55,39 +81,47 @@ def auth_callback():
     """Strava redirects here after the user clicks Allow."""
     error = request.args.get("error")
     if error:
-        return render_template("login.html", configured=is_configured(),
-                               client_id=CLIENT_ID,
-                               error="Strava authorization was denied. Please try again.")
+        return render_template("login.html",
+            host_credentials=host_credentials_set(),
+            callback_domain=_get_callback_domain(),
+            error="Strava authorization was denied. Please try again.")
 
     code = request.args.get("code")
     if not code:
         return redirect(url_for("login"))
 
+    # Retrieve the credentials used for this OAuth flow
+    client_id, client_secret = get_client_credentials()
+    if not client_id or not client_secret:
+        return redirect(url_for("login"))
+
     try:
-        token_data = exchange_code(code)
+        token_data = exchange_code(code, client_id, client_secret)
     except Exception as e:
         import traceback
         print("STRAVA EXCHANGE ERROR:", traceback.format_exc())
-        return render_template("login.html", configured=is_configured(),
-                               client_id=CLIENT_ID,
-                               error=f"Could not connect to Strava: {e}")
+        return render_template("login.html",
+            host_credentials=host_credentials_set(),
+            callback_domain=_get_callback_domain(),
+            error=f"Could not connect to Strava: {e}")
 
-    athlete     = token_data.get("athlete", {})
-    athlete_id  = str(athlete.get("id", ""))
+    athlete    = token_data.get("athlete", {})
+    athlete_id = str(athlete.get("id", ""))
     if not athlete_id:
-        return render_template("login.html", configured=is_configured(),
-                               client_id=CLIENT_ID,
-                               error="Could not get athlete ID from Strava.")
+        return render_template("login.html",
+            host_credentials=host_credentials_set(),
+            callback_domain=_get_callback_domain(),
+            error="Could not get athlete ID from Strava.")
 
     first  = athlete.get("firstname", "")
     last   = athlete.get("lastname",  "")
     name   = f"{first} {last}".strip() or athlete_id
     avatar = athlete.get("profile_medium", "")
 
-    # Strip athlete info from token before storing
+    # Save token with their own client credentials
     clean_token = {k: v for k, v in token_data.items() if k != "athlete"}
-    clean_token["client_id"]     = os.environ.get("STRAVA_CLIENT_ID", "")
-    clean_token["client_secret"] = os.environ.get("STRAVA_CLIENT_SECRET", "")
+    clean_token["client_id"]     = client_id
+    clean_token["client_secret"] = client_secret
 
     try:
         save_strava_token(athlete_id, clean_token,
@@ -95,9 +129,10 @@ def auth_callback():
     except Exception as e:
         import traceback
         print("SUPABASE SAVE ERROR:", traceback.format_exc())
-        return render_template("login.html", configured=is_configured(),
-                               client_id=CLIENT_ID,
-                               error=f"Database error: {e} — Have you run setup_db.sql in Supabase?")
+        return render_template("login.html",
+            host_credentials=host_credentials_set(),
+            callback_domain=_get_callback_domain(),
+            error=f"Database error: {e} — Have you run setup_db.sql in Supabase?")
 
     # Create a default profile if this is their first login
     if not load_profile(athlete_id):
@@ -109,10 +144,13 @@ def auth_callback():
         d["fitness_level"] = p.fitness_level.value
         save_profile(athlete_id, d)
 
-    # Set session
-    session.permanent   = True
-    session["user_id"]  = athlete_id
-    session["user_name"]= name
+    # Clear pending credentials — now stored in DB against athlete_id
+    session.pop("pending_client_id", None)
+    session.pop("pending_client_secret", None)
+
+    session.permanent      = True
+    session["user_id"]     = athlete_id
+    session["user_name"]   = name
     session["user_avatar"] = avatar
 
     return redirect(url_for("dashboard"))
@@ -125,6 +163,17 @@ def logout():
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _get_callback_domain() -> str:
+    """Return the domain to put in Strava Authorization Callback Domain field."""
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if render_url:
+        return render_url.replace("https://", "").replace("http://", "")
+    try:
+        return request.host
+    except Exception:
+        return "localhost:5000"
+
 
 def _get_profile(uid) -> RunnerProfile:
     d = load_profile(uid)
