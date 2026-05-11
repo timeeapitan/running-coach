@@ -17,6 +17,7 @@ import urllib.request, urllib.error
 
 def _sb_request(method, table, data=None, query=""):
     url     = f"{SUPABASE_URL}/rest/v1/{table}{query}"
+    print(f"[DB] {method} {url[:80]}", flush=True)  # debug — remove after fix
     headers = {
         "apikey":        SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -303,3 +304,75 @@ def _file_save_cache(username: str, today: str, summary: dict) -> None:
     p = os.path.join(_udir(username), "daily_cache.json")
     with open(p, "w") as f:
         json.dump({"date": today, "summary": summary}, f, indent=2)
+
+
+# ── Runs cache ────────────────────────────────────────────────────────────────
+# Caches Strava runs in Supabase so navigation does not hit the Strava API
+# on every page. TTL is 2 hours. Invalidated on /refresh.
+
+RUNS_CACHE_TTL_MINUTES = 120
+
+def load_cached_runs(username: str) -> Optional[list]:
+    """Return cached runs as list of dicts, or None if stale/missing."""
+    import time
+    if not USE_DB:
+        return _file_load_runs_cache(username)
+    try:
+        rows = _sb_get("runs_cache", f"?username=eq.{username}&select=runs,cached_at")
+        if not rows or not rows[0].get("runs"):
+            return None
+        cached_at = rows[0].get("cached_at", "")
+        if cached_at:
+            from datetime import timezone
+            import re
+            # Parse ISO timestamp
+            ts_str = re.sub(r"+.*$", "", cached_at.replace("Z", ""))
+            cached_dt = datetime.fromisoformat(ts_str)
+            age_minutes = (datetime.utcnow() - cached_dt).total_seconds() / 60
+            if age_minutes > RUNS_CACHE_TTL_MINUTES:
+                return None
+        raw = rows[0]["runs"]
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception as e:
+        print(f"[cache] load_cached_runs error: {e}")
+        return None
+
+def save_cached_runs(username: str, runs_data: list) -> None:
+    """Save serialised runs to cache."""
+    if not USE_DB:
+        _file_save_runs_cache(username, runs_data)
+        return
+    try:
+        _sb_delete("runs_cache", f"?username=eq.{username}")
+        _sb_insert("runs_cache", {
+            "username": username,
+            "runs": json.dumps(runs_data),
+        })
+    except Exception as e:
+        print(f"[cache] save_cached_runs error (non-fatal): {e}")
+
+def invalidate_runs_cache(username: str) -> None:
+    """Force next page load to re-fetch from Strava."""
+    if not USE_DB:
+        p = os.path.join(_udir(username), "runs_cache.json")
+        if os.path.exists(p): os.unlink(p)
+        return
+    try:
+        _sb_delete("runs_cache", f"?username=eq.{username}")
+    except Exception:
+        pass
+
+def _file_load_runs_cache(username: str) -> Optional[list]:
+    import time
+    p = os.path.join(_udir(username), "runs_cache.json")
+    if not os.path.exists(p): return None
+    with open(p) as f: data = json.load(f)
+    age_minutes = (time.time() - data.get("cached_at", 0)) / 60
+    if age_minutes > RUNS_CACHE_TTL_MINUTES: return None
+    return data.get("runs")
+
+def _file_save_runs_cache(username: str, runs_data: list) -> None:
+    import time
+    p = os.path.join(_udir(username), "runs_cache.json")
+    with open(p, "w") as f:
+        json.dump({"cached_at": time.time(), "runs": runs_data}, f)

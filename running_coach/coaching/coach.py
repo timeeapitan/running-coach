@@ -75,9 +75,26 @@ class RunningCoach:
         """Run the full rule-based analysis."""
         return self.analyzer.analyze(runs, feedback or {})
 
-    def recommend(self, analysis: AnalysisResult) -> WorkoutRecommendation:
+    def detect_and_update_fitness_level(
+        self,
+        runs: List[NormalizedRun],
+    ) -> dict:
+        """Auto-detect fitness level from run history and update profile if changed."""
+        from ..analysis.fitness_level import detect_fitness_level
+        result = detect_fitness_level(runs, self.profile)
+        if result["changed"]:
+            self.profile.fitness_level = result["level"]
+            # Update rules engine with new level
+            self.rules = CoachingRules(self.profile)
+        return result
+
+    def recommend(
+        self,
+        analysis: AnalysisResult,
+        runs: Optional[List[NormalizedRun]] = None,
+    ) -> WorkoutRecommendation:
         """Rule-based recommendation from an AnalysisResult."""
-        return self.rules.recommend(analysis)
+        return self.rules.recommend(analysis, runs or [])
 
     def predict_next_run(
         self,
@@ -96,7 +113,12 @@ class RunningCoach:
         # Inject ML models into predictor if trained
         self._inject_ml_models()
 
-        return self.predictor.predict(runs, analysis, feedback)
+        rec = self.predictor.predict(runs, analysis, feedback)
+        # Inject run steps from rules if predictor didn't set them
+        if not rec.steps:
+            rec.steps = self.rules.recommend(analysis, runs).steps
+            rec.terrain = self.rules._terrain_label(runs)
+        return rec
 
     def log_run(
         self,

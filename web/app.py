@@ -18,6 +18,7 @@ from web.db import (
     load_profile, save_profile, load_strava_token, save_strava_token,
     load_feedback, save_feedback_entry, list_users, load_athlete_info, USE_DB,
     load_cached_summary, save_cached_summary,
+    load_cached_runs, save_cached_runs, invalidate_runs_cache,
 )
 from running_coach.schemas.profile  import RunnerProfile
 from running_coach.schemas.feedback import ManualFeedback
@@ -145,12 +146,52 @@ def _get_model_dir(uid):
         _MODEL_CACHE[uid] = tempfile.mkdtemp(prefix=f"rc_{uid}_")
     return _MODEL_CACHE[uid]
 
+def _serialize_runs(runs) -> list:
+    return [{
+        "date":               r.date.isoformat(),
+        "activity_type":      r.activity_type.value,
+        "distance_km":        r.distance_km,
+        "duration_minutes":   r.duration_minutes,
+        "avg_pace_min_per_km":r.avg_pace_min_per_km,
+        "avg_hr":             r.avg_hr,
+        "max_hr":             r.max_hr,
+        "elevation_gain_m":   r.elevation_gain_m,
+        "cadence":            r.cadence,
+        "source":             r.source,
+    } for r in runs]
+
+def _deserialize_runs(data: list):
+    from running_coach.schemas import NormalizedRun, ActivityType
+    runs = []
+    for d in data:
+        try:
+            runs.append(NormalizedRun(
+                date=datetime.fromisoformat(d["date"]),
+                activity_type=ActivityType(d["activity_type"]),
+                distance_km=d["distance_km"],
+                duration_minutes=d["duration_minutes"],
+                avg_pace_min_per_km=d.get("avg_pace_min_per_km"),
+                avg_hr=d.get("avg_hr"),
+                max_hr=d.get("max_hr"),
+                elevation_gain_m=d.get("elevation_gain_m"),
+                cadence=d.get("cadence"),
+                source=d.get("source", "cache"),
+            ))
+        except Exception:
+            pass
+    return runs
+
 def _load_runs(uid):
+    # Try cache first — avoids Strava API call on every page
+    cached = load_cached_runs(uid)
+    if cached is not None:
+        return _deserialize_runs(cached)
+
+    # Cache miss — fetch from Strava
     token = load_strava_token(uid)
     if not token:
         return []
 
-    # Auto-refresh token if expired
     if token.get("expires_at", 0) < time.time() + 300:
         try:
             token = refresh_token(token)
@@ -163,6 +204,8 @@ def _load_runs(uid):
     try:
         from running_coach.parsers.strava import StravaParser
         runs = StravaParser(tmp.name).fetch_runs()
+        # Store in cache for subsequent page loads
+        save_cached_runs(uid, _serialize_runs(runs))
         return runs
     except Exception:
         return []
@@ -228,10 +271,15 @@ def dashboard():
     if len(runs) >= 10 and not coach.trainer.fatigue_predictor.is_trained:
         coach.train_models(runs)
 
+    # Auto-detect fitness level (change 12)
+    fitness_result = coach.detect_and_update_fitness_level(runs)
+    if fitness_result["changed"]:
+        _save_profile_obj(uid, coach.profile)
+
     analysis = coach.analyze(runs, feedback)
     rec = (coach.predict_next_run(runs, feedback)
            if len(runs) >= NextRunPredictor.MIN_RUNS_FOR_PERSONALISATION
-           else coach.recommend(analysis))
+           else coach.recommend(analysis, runs))
 
     from running_coach.analysis.daily_summary import build_daily_summary
 
@@ -248,6 +296,7 @@ def dashboard():
         weeks_to_race=profile.weeks_to_race(), run_count=len(runs),
         ml_active=coach.trainer.fatigue_predictor.is_trained,
         summary=summary,
+        fitness_result=fitness_result,
         no_runs=False, error=None,
         user_name=current_user_name(), user_avatar=current_user_avatar())
 
@@ -400,6 +449,7 @@ def refresh_summary():
 
     summary = build_daily_summary(runs, profile, analysis, rec, feedback)
     save_cached_summary(uid, summary)  # overwrites today's cache
+    invalidate_runs_cache(uid)  # force fresh Strava fetch next open
 
     return redirect(url_for("dashboard"))
 

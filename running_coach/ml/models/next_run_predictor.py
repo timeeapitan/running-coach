@@ -285,10 +285,7 @@ class NextRunPredictor:
         hr_range: Optional[Tuple[int, int]],
         zone: str,
     ) -> str:
-        dur_str  = f" (~{int(dur)} min)" if dur else ""
-        pace_str = f" at {pace_str}" if pace_str else ""
-        hr_str   = f" | HR {hr_range[0]}–{hr_range[1]} bpm" if hr_range else ""
-
+        # Just the workout type name — details live in the targets grid
         type_labels = {
             WorkoutType.EASY:     "Easy run",
             WorkoutType.MODERATE: "Aerobic run",
@@ -298,8 +295,7 @@ class NextRunPredictor:
             WorkoutType.RECOVERY: "Recovery run",
             WorkoutType.REST:     "Rest day",
         }
-        label = type_labels.get(wtype, "Run")
-        return f"{label} — {dist:.1f} km{dur_str}{pace_str}{hr_str}"
+        return type_labels.get(wtype, "Run")
 
     def _build_rationale(
         self,

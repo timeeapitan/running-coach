@@ -328,8 +328,10 @@ def generate_race_plan(
         base_wks, build_wks, peak_wks, taper_wks = max(1,weeks-2), 0, 0, min(weeks,2)
 
     plan = []
+    rpw = max(1, profile.runs_per_week)  # respect user's runs/week
+
     for w in range(1, weeks + 1):
-        rel = w  # weeks from now
+        rel = w
         remaining = weeks - w
 
         if remaining >= (build_wks + peak_wks + taper_wks):
@@ -337,7 +339,7 @@ def generate_race_plan(
             pct   = 1.0 + (w / max(1, base_wks)) * 0.15
             target_km = round(base_km * pct, 1)
             long_run  = round(target_km * 0.30, 1)
-            sessions  = [
+            all_sessions = [
                 f"Easy {round(target_km*0.20,1)} km (zone 2)",
                 f"Easy {round(target_km*0.20,1)} km (zone 2)",
                 f"Moderate {round(target_km*0.25,1)} km (zone 3)",
@@ -349,7 +351,7 @@ def generate_race_plan(
             phase = "Build"
             target_km = round(base_km * 1.20, 1)
             long_run  = round(min(target_km * 0.35, dist * 0.85), 1)
-            sessions  = [
+            all_sessions = [
                 f"Easy {round(target_km*0.18,1)} km (zone 2)",
                 f"Tempo {round(target_km*0.22,1)} km (zone 4)",
                 f"Easy {round(target_km*0.18,1)} km (zone 2)",
@@ -360,7 +362,7 @@ def generate_race_plan(
         elif remaining >= taper_wks:
             phase = "Peak"
             target_km = round(base_km * 1.10, 1)
-            sessions  = [
+            all_sessions = [
                 f"Easy {round(target_km*0.20,1)} km (zone 2)",
                 f"Threshold {round(target_km*0.20,1)} km (zone 4-5)",
                 f"Easy {round(target_km*0.15,1)} km (zone 2)",
@@ -372,18 +374,24 @@ def generate_race_plan(
             phase = "Taper"
             taper_pct = 0.6 if remaining == 1 else 0.4
             target_km = round(base_km * taper_pct, 1)
-            sessions  = [
+            all_sessions = [
                 f"Easy {round(target_km*0.35,1)} km (zone 2)",
                 "Rest or 20 min easy jog",
                 f"Shakeout {round(min(3.0, dist*0.15),1)} km at race pace",
             ]
             notes = "Cut volume, keep sharpness. Trust your training. Sleep well."
 
+        # Cap sessions to runs_per_week — always keep the last session (long/key)
+        if len(all_sessions) > rpw:
+            # Keep first (rpw-1) easy sessions + the last key session
+            sessions = all_sessions[:rpw-1] + [all_sessions[-1]]
+        else:
+            sessions = all_sessions
+
         plan.append({
             "week":      w,
             "phase":     phase,
             "target_km": target_km,
-            "long_run":  long_run if "long_run" in dir() else None,
             "sessions":  sessions,
             "notes":     notes,
         })

@@ -61,3 +61,15 @@ create index if not exists daily_cache_username_date_idx on daily_cache(username
 alter table daily_cache enable row level security;
 create policy "service role full access on daily_cache"
   on daily_cache for all using (true);
+
+-- Runs cache — stores Strava runs per user, TTL managed in app code
+create table if not exists runs_cache (
+  id          bigserial primary key,
+  username    text not null references users(username) on delete cascade,
+  runs        jsonb not null,
+  cached_at   timestamp with time zone default now(),
+  unique(username)
+);
+alter table runs_cache enable row level security;
+create policy "service role full access on runs_cache"
+  on runs_cache for all using (true);

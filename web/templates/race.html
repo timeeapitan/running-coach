@@ -3,7 +3,7 @@
 {% block content %}
 
 <p style="font-size:13px;color:var(--c-muted);margin-bottom:1.25rem;">
-  Set a race goal and get a periodised training plan built from your actual fitness.
+  Set a race goal and get a periodised training plan built around your {{ profile.runs_per_week }} runs/week.
 </p>
 
 <div class="card">
@@ -56,33 +56,37 @@
   </div>
   <p style="font-size:12px;color:var(--c-muted);">
     Based on your {{ pred.ref_run_dist }} km run on {{ pred.ref_run_date }} ({{ pred.ref_run_pace }}).
-    <a href="/insights" style="color:var(--c-teal);">More detail in Insights →</a>
+    <a href="/insights" style="color:var(--c-teal);">More detail →</a>
   </p>
 </div>
 {% endif %}
 
 {% if weeks_to_race and plan %}
 <div class="card">
-  <div class="card-title">{{ weeks_to_race }}-week training plan to {{ profile.race_date }}</div>
+  <div class="card-title">{{ weeks_to_race }}-week plan · {{ profile.runs_per_week }} runs/week</div>
 
-  {% set phase_colors = {'Base':'var(--c-teal-bg)','Build':'var(--c-amber-bg)','Peak':'var(--c-purple-bg)','Taper':'#f0f0ee'} %}
-  {% set phase_text = {'Base':'var(--c-teal)','Build':'var(--c-amber)','Peak':'var(--c-purple)','Taper':'var(--c-muted)'} %}
+  {% set phase_colors = {'Base':'var(--c-teal)','Build':'#ef9f27','Peak':'var(--c-purple)','Taper':'var(--c-muted)'} %}
+  {% set phase_bg     = {'Base':'var(--c-teal-bg)','Build':'var(--c-amber-bg)','Peak':'var(--c-purple-bg)','Taper':'var(--c-bg)'} %}
 
   {% for w in plan %}
-  <div style="border-bottom:0.5px solid var(--c-border);padding:12px 0;{% if loop.last %}border-bottom:none;{% endif %}">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-      <span style="font-size:12px;color:var(--c-muted);width:50px;">Week {{ w.week }}</span>
+  <!-- Change 5: race-week card with numbered sessions -->
+  <div class="race-week">
+    <div class="race-week-header">
+      <span class="race-week-num">Week {{ w.week }}</span>
       <span style="font-size:11px;font-weight:600;padding:2px 10px;border-radius:10px;
-                   background:{{ phase_colors[w.phase] }};color:{{ phase_text[w.phase] }};">
+                   background:{{ phase_bg[w.phase] }};color:{{ phase_colors[w.phase] }};">
         {{ w.phase }}
       </span>
-      <span style="font-size:13px;font-weight:500;margin-left:auto;">{{ w.target_km }} km</span>
+      <span class="race-week-km">{{ w.target_km }} km</span>
     </div>
-    <div style="font-size:12px;color:var(--c-muted);padding-left:60px;">
+    <div class="race-week-sessions">
       {% for s in w.sessions %}
-      <div style="margin:2px 0;">· {{ s }}</div>
+      <div class="race-session">
+        <div class="race-session-num">{{ loop.index }}</div>
+        <div class="race-session-text">{{ s }}</div>
+      </div>
       {% endfor %}
-      <div style="margin-top:4px;font-style:italic;">{{ w.notes }}</div>
+      <div class="race-week-note">{{ w.notes }}</div>
     </div>
   </div>
   {% endfor %}

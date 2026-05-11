@@ -49,7 +49,9 @@ def build_daily_summary(
     if runs:
         sorted_runs  = sorted(runs, key=lambda r: r.date, reverse=True)
         last_run     = sorted_runs[0]
-        days_inactive= (now - last_run.date).days
+        # Clamp to 0 — negative values happen when Strava stores UTC time
+        # and the user is in a timezone ahead of UTC (e.g. Romania = UTC+3)
+        days_inactive= max(0, (now - last_run.date).days)
     else:
         days_inactive = 999
 

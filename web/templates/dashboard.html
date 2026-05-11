@@ -8,12 +8,28 @@
 
 {% if not no_runs %}
 
-<p style="font-size:13px;color:var(--c-muted);margin-bottom:1rem;">
-  {{ profile.name }} &middot; {{ run_count }} runs
-  {% if ml_active %}<span class="ml-badge" style="margin-left:6px;">ML active</span>{% endif %}
+<!-- fitness level badge + run count -->
+<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:1rem;">
+  <span style="font-size:13px;color:var(--c-muted);">{{ profile.name }} &middot; {{ run_count }} runs</span>
+  {% if ml_active %}<span class="ml-badge">ML active</span>{% endif %}
+  <!-- Change 12: fitness level badge -->
+  <span style="font-size:12px;font-weight:500;padding:2px 10px;border-radius:10px;
+               background:var(--c-teal-bg);color:var(--c-teal);">
+    {{ profile.fitness_level.value | capitalize }}
+  </span>
+  {% if fitness_result and fitness_result.changed %}
+  <span style="font-size:12px;color:var(--c-amber);font-style:italic;">
+    ↑ Updated from {{ fitness_result.prev_level }}
+  </span>
+  {% endif %}
+</div>
+{% if fitness_result %}
+<p style="font-size:12px;color:var(--c-muted);margin-bottom:1rem;margin-top:-0.5rem;">
+  {{ fitness_result.reason }}
 </p>
+{% endif %}
 
-<!-- ── DAILY BRIEFING CARD ─────────────────────────────────────────── -->
+<!-- ── DAILY BRIEFING ── -->
 {% if summary %}
 {% set status_colors = {
   'go':      ('var(--c-teal)',  'var(--c-teal-bg)'),
@@ -24,13 +40,11 @@
 {% set sc = status_colors.get(summary.status, status_colors['gentle']) %}
 
 <div style="border-left:3px solid {{ sc[0] }};background:{{ sc[1] }};border-radius:0 var(--radius) var(--radius) 0;padding:1rem 1.1rem;margin-bottom:1rem;">
-  <div style="font-size:17px;font-weight:600;color:{{ sc[0] }};margin-bottom:3px;">
-    {{ summary.headline }}
-  </div>
+  <div style="font-size:17px;font-weight:600;color:{{ sc[0] }};margin-bottom:3px;">{{ summary.headline }}</div>
   <div style="font-size:13px;color:var(--c-muted);">{{ summary.subline }}</div>
 
-  <div style="display:flex;gap:1.5rem;margin-top:0.85rem;flex-wrap:wrap;font-size:13px;">
-    <!-- Streak or days inactive -->
+  <div style="display:flex;gap:1.25rem;margin-top:0.85rem;flex-wrap:wrap;font-size:13px;">
+    <!-- Change 10: -1 bug fixed, now 0 is "today" -->
     {% if summary.days_inactive == 0 %}
     <span style="color:var(--c-muted);">Ran today</span>
     {% elif summary.days_inactive == 1 %}
@@ -40,48 +54,37 @@
     {% endif %}
 
     {% if summary.streak_days >= 2 %}
-    <span style="color:var(--c-teal);">{{ summary.streak_days }}-day streak</span>
+    <span style="color:var(--c-teal);">{{ summary.streak_days }}-day streak 🔥</span>
     {% endif %}
 
-    <!-- Weekly progress -->
     {% if summary.week_goal_km %}
-    <span style="color:var(--c-muted);">
-      This week: <strong style="color:var(--c-text);">{{ summary.week_km }} / {{ summary.week_goal_km }} km</strong>
-      {% if summary.week_pct is not none %}({{ summary.week_pct }}%){% endif %}
-    </span>
+    <span style="color:var(--c-muted);">This week: <strong style="color:var(--c-text);">{{ summary.week_km }} / {{ summary.week_goal_km }} km</strong>
+    {% if summary.week_pct is not none %} ({{ summary.week_pct }}%){% endif %}</span>
     {% else %}
     <span style="color:var(--c-muted);">This week: <strong style="color:var(--c-text);">{{ summary.week_km }} km</strong></span>
     {% endif %}
 
-    <!-- Injury risk -->
     {% if summary.risk_level == 'high' %}
-    <span style="color:var(--c-red);">Risk: <strong>high ({{ summary.risk_score|int }})</strong></span>
+    <span style="color:var(--c-red);">⚠ Risk: high</span>
     {% elif summary.risk_level == 'moderate' %}
-    <span style="color:#854f0b;">Risk: <strong>moderate</strong></span>
+    <span style="color:#854f0b;">Risk: moderate</span>
     {% else %}
     <span style="color:var(--c-muted);">Risk: low</span>
     {% endif %}
   </div>
 
-  <!-- Refresh link -->
-  <div style="margin-top:10px;">
-    <a href="/refresh" style="font-size:12px;color:var(--c-muted);text-decoration:none;opacity:0.7;">
-      Recalculate after a new run
-    </a>
-  </div>
-
-  <!-- Weekly goal bar -->
   {% if summary.week_goal_km and summary.week_pct is not none %}
-  <div style="margin-top:10px;">
-    <div style="height:5px;background:var(--c-border);border-radius:3px;overflow:hidden;">
-      <div style="height:100%;width:{{ [summary.week_pct, 100]|min }}%;background:{{ sc[0] }};border-radius:3px;transition:width 0.5s ease;"></div>
-    </div>
+  <div style="margin-top:10px;height:5px;background:var(--c-border);border-radius:3px;overflow:hidden;">
+    <div style="height:100%;width:{{ [summary.week_pct, 100]|min }}%;background:{{ sc[0] }};border-radius:3px;transition:width 0.5s;"></div>
   </div>
   {% endif %}
+
+  <!-- Change 6: recalculate button -->
+  <a href="/refresh" class="btn-recalc">Recalculate after a new run</a>
 </div>
 {% endif %}
 
-<!-- ── STATUS SCORES ───────────────────────────────────────────────── -->
+<!-- ── STATUS ── -->
 <div class="card">
   <div class="card-title">Current status</div>
   <div class="bar-row">
@@ -99,14 +102,28 @@
     <div class="bar-track"><div class="bar-fill bar-teal" style="width:{{ analysis.readiness_score }}%"></div></div>
     <span class="bar-val">{{ analysis.readiness_score|int }}/100</span>
   </div>
-  <div style="margin-top:1rem;font-size:13px;color:var(--c-muted);display:flex;gap:1.5rem;flex-wrap:wrap;">
+
+  <!-- Change 7: ATL/CTL/TSB with tooltips -->
+  <div class="stat-row">
     {% if analysis.fatigue_factors.atl is defined %}
-    <span>ATL <strong style="color:var(--c-text)">{{ analysis.fatigue_factors.atl|int }}</strong></span>
-    <span>CTL <strong style="color:var(--c-text)">{{ analysis.fatigue_factors.ctl|int }}</strong></span>
-    <span>TSB <strong style="color:var(--c-text)">{% if analysis.fatigue_factors.tsb >= 0 %}+{% endif %}{{ analysis.fatigue_factors.tsb|int }}</strong></span>
+    <span class="stat-item">
+      ATL <strong>{{ analysis.fatigue_factors.atl|int }}</strong>
+      <span class="stat-info">?</span>
+      <span class="stat-tooltip">Acute Training Load — how hard you've trained in the last 7 days. High = tired.</span>
+    </span>
+    <span class="stat-item">
+      CTL <strong>{{ analysis.fatigue_factors.ctl|int }}</strong>
+      <span class="stat-info">?</span>
+      <span class="stat-tooltip">Chronic Training Load — your fitness base built over the last 6 weeks. Higher = fitter.</span>
+    </span>
+    <span class="stat-item">
+      TSB <strong>{% if analysis.fatigue_factors.tsb >= 0 %}+{% endif %}{{ analysis.fatigue_factors.tsb|int }}</strong>
+      <span class="stat-info">?</span>
+      <span class="stat-tooltip">Training Stress Balance — CTL minus ATL. Positive = fresh and ready. Negative = fatigued.</span>
+    </span>
     {% endif %}
-    <span>4-wk avg <strong style="color:var(--c-text)">{{ analysis.average_weekly_volume_km }} km</strong></span>
-    <span>Trend <strong style="color:var(--c-text)">{{ analysis.trend }}</strong></span>
+    <span style="color:var(--c-muted);">4-wk avg <strong style="color:var(--c-text);">{{ analysis.average_weekly_volume_km }} km</strong></span>
+    <span style="color:var(--c-muted);">Trend <strong style="color:var(--c-text);">{{ analysis.trend }}</strong></span>
   </div>
 </div>
 
@@ -116,9 +133,21 @@
 {% endfor %}
 {% endif %}
 
-<!-- ── NEXT RUN ────────────────────────────────────────────────────── -->
+<!-- ── NEXT RUN (changes 2, 3, 9, 13) ── -->
 <div class="rec-box">
-  <div class="rec-type">{{ recommendation.workout_type.value.replace('_',' ') }}</div>
+  <div class="rec-type">
+    {{ recommendation.workout_type.value.replace('_',' ') }}
+    {% if recommendation.terrain and recommendation.terrain != 'road' %}
+    <span style="font-size:11px;background:var(--c-amber-bg);color:var(--c-amber);padding:1px 7px;border-radius:8px;font-weight:500;">
+      {{ recommendation.terrain }}
+    </span>
+    {% endif %}
+    <!-- Change 3: ML pill -->
+    {% if ml_active %}
+    <span class="ml-pill">ML personalised</span>
+    {% endif %}
+  </div>
+  <!-- Change 2: just the name, no duplicated details -->
   <div class="rec-title">{{ recommendation.description }}</div>
   <div class="rec-rationale">{{ recommendation.rationale }}</div>
 
@@ -147,21 +176,39 @@
       <div class="target-value">{{ recommendation.intensity.value.replace('_',' ') }}</div>
     </div>
   </div>
+
+  <!-- Change 9: structured warm-up/main/cool-down steps -->
+  {% if recommendation.steps %}
+  <div class="run-steps">
+    {% for step in recommendation.steps %}
+    <div class="run-step">
+      <div class="run-step-num">{{ loop.index }}</div>
+      <div class="run-step-body">
+        <div class="run-step-label">{{ step.label }}</div>
+        <div class="run-step-detail">{{ step.detail }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
   {% endif %}
 </div>
 
-<!-- ── GARMIN ENTRY ────────────────────────────────────────────────── -->
+<!-- ── GARMIN ENTRY ── -->
 {% if not recommendation.is_rest %}
 <div class="card">
   <div class="card-title">Enter on your Garmin</div>
   {% set wtype = recommendation.workout_type.value %}
-  {% if wtype in ['easy','moderate','recovery'] %}
+  {% if wtype in ['easy','moderate','recovery','long_run'] %}
   <div class="garmin-steps">
-    <h4>Simple distance alert</h4>
+    <h4>Distance alert</h4>
     <ol>
       <li>Start a <strong>Running</strong> activity on your watch</li>
       <li>Set a Distance alert → <strong>{{ recommendation.target_distance_km }} km</strong></li>
-      <li>Keep HR in <strong>{{ recommendation.target_hr_zone }}</strong> zone</li>
+      <li>Keep HR in <strong>{{ recommendation.target_hr_zone }}</strong> zone throughout</li>
+      {% if recommendation.terrain and 'trail' in recommendation.terrain %}
+      <li>Use <strong>Trail Running</strong> mode if your watch has it</li>
+      {% endif %}
     </ol>
   </div>
   {% elif wtype == 'tempo' %}
@@ -170,9 +217,9 @@
     <ol>
       <li>Garmin Connect → Calendar → + → Workout</li>
       <li>Step 1: Warm-up 1.5 km — easy zone</li>
-      <li>Step 2: Work {{ (recommendation.target_distance_km - 3)|round(1) }} km — threshold zone</li>
+      <li>Step 2: Work {{ ([recommendation.target_distance_km - 3, 1.0]|max)|round(1) }} km — threshold zone</li>
       <li>Step 3: Cool-down 1.5 km — easy zone</li>
-      <li>Save &amp; sync</li>
+      <li>Save &amp; sync to watch</li>
     </ol>
   </div>
   {% elif wtype == 'interval' %}
@@ -183,23 +230,14 @@
       <li>Step 1: Warm-up 1 km — easy zone</li>
       <li>Step 2: Repeat 6× — Work 800 m (max zone) / Rest 400 m (recovery zone)</li>
       <li>Step 3: Cool-down 1 km — easy zone</li>
-      <li>Save &amp; sync</li>
-    </ol>
-  </div>
-  {% else %}
-  <div class="garmin-steps">
-    <h4>Distance alert</h4>
-    <ol>
-      <li>Start a Running activity</li>
-      <li>Set alert: Distance → <strong>{{ recommendation.target_distance_km }} km</strong></li>
-      <li>Run at easy, conversational pace throughout</li>
+      <li>Save &amp; sync to watch</li>
     </ol>
   </div>
   {% endif %}
 </div>
 {% endif %}
 
-<!-- ── HR ZONES ───────────────────────────────────────────────────── -->
+<!-- ── HR ZONES ── -->
 <div class="card">
   <div class="card-title">Your HR zones</div>
   <table class="zone-table">
@@ -214,31 +252,15 @@
   </table>
 </div>
 
-<!-- ── PERSONAL RECORDS ────────────────────────────────────────────── -->
+<!-- ── PRs ── -->
 {% if prs %}
 <div class="card">
   <div class="card-title">Personal records</div>
   <div class="pr-grid">
-    <div class="pr-item">
-      <div class="metric-label">Longest run</div>
-      <div class="metric-value">{{ prs.longest_km }} km</div>
-    </div>
-    {% if prs.fastest_pace_str %}
-    <div class="pr-item">
-      <div class="metric-label">Fastest pace</div>
-      <div class="metric-value">{{ prs.fastest_pace_str }}</div>
-    </div>
-    {% endif %}
-    {% if prs.most_elev %}
-    <div class="pr-item">
-      <div class="metric-label">Most elevation</div>
-      <div class="metric-value">{{ prs.most_elev }} m</div>
-    </div>
-    {% endif %}
-    <div class="pr-item">
-      <div class="metric-label">Total logged</div>
-      <div class="metric-value">{{ prs.total_km }} km</div>
-    </div>
+    <div class="pr-item"><div class="metric-label">Longest run</div><div class="metric-value">{{ prs.longest_km }} km</div></div>
+    {% if prs.fastest_pace_str %}<div class="pr-item"><div class="metric-label">Fastest pace</div><div class="metric-value">{{ prs.fastest_pace_str }}</div></div>{% endif %}
+    {% if prs.most_elev %}<div class="pr-item"><div class="metric-label">Most elevation</div><div class="metric-value">{{ prs.most_elev }} m</div></div>{% endif %}
+    <div class="pr-item"><div class="metric-label">Total logged</div><div class="metric-value">{{ prs.total_km }} km</div></div>
   </div>
 </div>
 {% endif %}
@@ -247,12 +269,8 @@
 <div class="card">
   <div class="card-title">Race countdown</div>
   <p style="font-size:28px;font-weight:600;">{{ weeks_to_race }} weeks</p>
-  <p style="font-size:13px;color:var(--c-muted);margin-top:4px;">
-    to {{ profile.race_date }} &middot; {{ profile.race_distance_km }} km
-  </p>
-  <a href="/race" style="display:inline-block;margin-top:10px;font-size:13px;color:var(--c-teal);">
-    View training plan →
-  </a>
+  <p style="font-size:13px;color:var(--c-muted);margin-top:4px;">to {{ profile.race_date }} &middot; {{ profile.race_distance_km }} km</p>
+  <a href="/race" style="display:inline-block;margin-top:10px;font-size:13px;color:var(--c-teal);">View training plan →</a>
 </div>
 {% endif %}
 
