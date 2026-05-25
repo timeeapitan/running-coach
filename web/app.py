@@ -311,19 +311,18 @@ def dashboard():
     feedback = load_feedback(uid)
     coach    = _get_coach(uid, profile)
 
-    if not runs:
-        return render_template("dashboard.html",
-            profile=profile, error="No runs found on Strava yet.",
-            no_runs=True, user_name=current_user_name(),
-            user_avatar=current_user_avatar())
+    # No runs yet — still show a profile-based recommendation using rules engine
+    is_new_user = len(runs) == 0
 
     if len(runs) >= 10 and not coach.trainer.fatigue_predictor.is_trained:
         coach.train_models(runs)
 
-    # Auto-detect fitness level (change 12)
-    fitness_result = coach.detect_and_update_fitness_level(runs)
-    if fitness_result["changed"]:
-        _save_profile_obj(uid, coach.profile)
+    # Auto-detect fitness level (only when we have data)
+    fitness_result = {"changed": False, "reason": "", "level": profile.fitness_level}
+    if runs:
+        fitness_result = coach.detect_and_update_fitness_level(runs)
+        if fitness_result["changed"]:
+            _save_profile_obj(uid, coach.profile)
 
     analysis = coach.analyze(runs, feedback)
     rec = (coach.predict_next_run(runs, feedback)
@@ -344,8 +343,9 @@ def dashboard():
         zones=profile.get_hr_zones(), prs=_compute_prs(runs),
         weeks_to_race=profile.weeks_to_race(), run_count=len(runs),
         ml_active=coach.trainer.fatigue_predictor.is_trained,
-        summary=summary,
+        summary=summary if not is_new_user else None,
         fitness_result=fitness_result,
+        is_new_user=is_new_user,
         no_runs=False, error=None,
         user_name=current_user_name(), user_avatar=current_user_avatar())
 
@@ -360,6 +360,7 @@ def history():
     if not runs:
         return render_template("history.html", profile=profile,
             runs=[], chart_data="[]", weekly="[]", drift={},
+            is_new_user=True,
             user_name=current_user_name(), user_avatar=current_user_avatar())
     recent = sorted(runs, key=lambda r: r.date, reverse=True)[:60]
     chart_data = [

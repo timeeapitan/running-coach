@@ -2,7 +2,7 @@
 {% block title %}Setup — Running Coach{% endblock %}
 {% block content %}
 
-<p style="font-size:13px;color:var(--c-muted);margin-bottom:1.25rem;">Your personal settings. Max HR and resting HR are the most important — they calibrate your training zones.</p>
+<p style="font-size:13px;color:var(--c-muted);margin-bottom:1.25rem;">Fields marked <span style="color:var(--c-red);">*</span> are required for accurate recommendations.</p>
 
 <div class="card">
   <form method="POST" action="/setup">
@@ -17,20 +17,20 @@
         <input type="number" name="age" value="{{ profile.age if profile and profile.age else '' }}" placeholder="e.g. 27">
       </div>
       <div class="form-group">
-        <label>Runs per week target</label>
-        <input type="number" name="runs_per_week" value="{{ profile.runs_per_week if profile else 3 }}" placeholder="3">
+        <label>Runs per week <span style="color:var(--c-red);">*</span></label>
+        <input type="number" name="runs_per_week" required value="{{ profile.runs_per_week if profile else 3 }}" placeholder="3">
       </div>
     </div>
 
     <div class="form-row">
       <div class="form-group">
-        <label>Max heart rate (bpm)</label>
-        <input type="number" name="max_hr" value="{{ profile.max_hr if profile and profile.max_hr else '' }}" placeholder="e.g. 183">
+        <label>Max heart rate (bpm) <span style="color:var(--c-red);">*</span></label>
+        <input type="number" name="max_hr" required value="{{ profile.max_hr if profile and profile.max_hr else '' }}" placeholder="e.g. 183">
         <p style="font-size:12px;color:var(--c-muted);margin-top:4px;">Look at your hardest run in Garmin — use that max HR</p>
       </div>
       <div class="form-group">
-        <label>Resting heart rate (bpm)</label>
-        <input type="number" name="resting_hr" value="{{ profile.resting_hr if profile and profile.resting_hr else '' }}" placeholder="e.g. 71">
+        <label>Resting heart rate (bpm) <span style="color:var(--c-red);">*</span></label>
+        <input type="number" name="resting_hr" required value="{{ profile.resting_hr if profile and profile.resting_hr else '' }}" placeholder="e.g. 71">
         <p style="font-size:12px;color:var(--c-muted);margin-top:4px;">Garmin app → Health Stats → Heart Rate (morning low)</p>
       </div>
     </div>

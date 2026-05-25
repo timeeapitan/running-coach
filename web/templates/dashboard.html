@@ -6,6 +6,29 @@
 <div class="warning">{{ error }}</div>
 {% endif %}
 
+{% if not profile.max_hr or not profile.resting_hr %}
+<div style="background:var(--c-amber-bg);border-left:3px solid #ef9f27;border-radius:0 var(--radius) var(--radius) 0;padding:0.85rem 1rem;margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+  <span style="font-size:13px;color:var(--c-amber);">
+    ⚠ Your profile is incomplete — recommendations may be inaccurate without your max HR and resting HR.
+  </span>
+  <a href="/setup" class="btn btn-sm" style="background:var(--c-amber);color:#fff;white-space:nowrap;flex-shrink:0;">Complete profile</a>
+</div>
+{% endif %}
+
+{% if is_new_user %}
+<div style="background:var(--c-teal-bg);border-left:3px solid var(--c-teal);border-radius:0 var(--radius) var(--radius) 0;padding:1rem 1.1rem;margin-bottom:1rem;">
+  <div style="font-size:16px;font-weight:600;color:var(--c-teal);margin-bottom:4px;">Welcome! No Strava runs found yet.</div>
+  <div style="font-size:13px;color:var(--c-muted);margin-bottom:0.75rem;">
+    The recommendation below is based on your profile settings. It will personalise as soon as you log runs on Strava.
+  </div>
+  <div style="font-size:13px;color:var(--c-muted);">
+    <strong style="color:var(--c-text);">To get started:</strong>
+    connect Garmin to Strava in the Strava app → Profile → Settings → Connected Apps,
+    then do your first run and come back.
+  </div>
+</div>
+{% endif %}
+
 {% if not no_runs %}
 
 <!-- fitness level badge + run count -->
@@ -166,10 +189,20 @@
       <div class="target-value">{{ recommendation.target_hr_zone }}</div>
     </div>
     {% endif %}
+    {% if recommendation.target_distance_km and recommendation.target_duration_minutes %}
+    <div class="target-item">
+      <div class="target-label">Target pace</div>
+      <div class="target-value">
+        {% set pace = recommendation.target_duration_minutes / recommendation.target_distance_km %}
+        {{ pace | int }}:{{ ((pace % 1) * 60) | int | string }}{% if ((pace % 1) * 60) | int < 10 %}0{% endif %}/km
+      </div>
+    </div>
+    {% else %}
     <div class="target-item">
       <div class="target-label">Effort</div>
       <div class="target-value">{{ recommendation.intensity.value.replace('_',' ') }}</div>
     </div>
+    {% endif %}
   </div>
 
   <!-- Change 9: steps in collapsible section -->
