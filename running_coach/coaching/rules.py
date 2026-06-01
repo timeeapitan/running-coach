@@ -255,48 +255,58 @@ class CoachingRules:
     # ── Step builders (change 9) ───────────────────────────────────────
 
     def _easy_steps(self, km: float, terrain: str) -> list:
-        main = round(km - 0.5, 1) if km > 1.5 else km
-        trail_tip = " Walk uphill sections freely." if "trail" in terrain else ""
+        trail_tip = " On trail, walk anything that feels steep — saving energy matters more than pace." if "trail" in terrain else ""
         return [
-            {"label": "Warm-up",    "detail": f"0.5 km very easy walk/jog to loosen up."},
-            {"label": "Main run",   "detail": f"{main:.1f} km easy, fully conversational pace. HR in easy zone.{trail_tip}"},
-            {"label": "Cool-down",  "detail": "5 min easy walk + calf and quad stretch."},
+            {"label": "How to start",
+             "detail": "Begin at a pace that feels almost too slow. If you feel good at 10 min in, you can pick it up slightly — but most people start too fast."},
+            {"label": "How it should feel",
+             "detail": f"You should be able to hold a full conversation the whole time. If you're breathing too hard to talk, slow down. Keep HR in easy zone throughout.{trail_tip}"},
+            {"label": "Finish strong",
+             "detail": "End with 5 min of walking and a quick stretch of calves and quads. The goal today is recovery and consistency, not performance."},
         ]
 
     def _moderate_steps(self, km: float, terrain: str) -> list:
-        warmup = 0.5; cooldown = 0.5
-        main   = round(km - warmup - cooldown, 1)
-        trail_tip = " Effort not pace — HR over distance on climbs." if "trail" in terrain else ""
+        trail_tip = " Use effort as your guide on climbs, not pace — HR tells the real story on trail." if "trail" in terrain else ""
         return [
-            {"label": "Warm-up",   "detail": f"{warmup} km easy jog."},
-            {"label": "Main run",  "detail": f"{main:.1f} km at aerobic effort — short sentences OK.{trail_tip}"},
-            {"label": "Cool-down", "detail": f"{cooldown} km easy jog + stretch."},
+            {"label": "Ease in",
+             "detail": "First 5–10 min should feel easy. Let your body warm up before pushing into the aerobic zone."},
+            {"label": "The middle",
+             "detail": f"Settle into a rhythm where short sentences are comfortable but you wouldn't want to chat. You should feel like you're working but in control.{trail_tip}"},
+            {"label": "Wind down",
+             "detail": "Last 5 min: ease the pace back to easy. Finish with a stretch — focus on hips, hamstrings, and calves."},
         ]
 
     def _tempo_steps(self, km: float, terrain: str) -> list:
-        warmup = 1.5; cooldown = 1.5
-        main   = round(km - warmup - cooldown, 1)
-        terrain_note = " Adjust target pace +10–15 sec/km for hills." if "trail" in terrain else ""
+        terrain_note = " On hills, target HR not pace — uphill tempo at the same effort will be slower." if "trail" in terrain else ""
         return [
-            {"label": "Warm-up",       "detail": f"{warmup} km easy jog + 4× 20 sec strides."},
-            {"label": "Tempo effort",  "detail": f"{main:.1f} km at threshold pace. Breathing laboured but sustainable.{terrain_note}"},
-            {"label": "Cool-down",     "detail": f"{cooldown} km easy jog + full leg stretch."},
+            {"label": "Warm-up (10–15 min)",
+             "detail": "Easy jog until you feel loose, then 4× 20-second strides with 40 sec walk between. Don't skip this — cold tempo runs lead to injury."},
+            {"label": "The tempo block",
+             "detail": f"Comfortably hard — you can say a few words but not a sentence. If you have to slow down to survive, you went out too fast. Aim to finish feeling like you had 10% left.{terrain_note}"},
+            {"label": "Cool-down (10 min)",
+             "detail": "Jog easy until your breathing settles, then walk 5 min. Full stretch: quad, hip flexor, calf. Eat within 30 min."},
         ]
 
     def _interval_steps(self, reps: int, terrain: str) -> list:
-        terrain_note = " Use flat sections for work intervals." if "trail" in terrain else ""
+        terrain_note = " Find the flattest section available for your reps." if "trail" in terrain else ""
         return [
-            {"label": "Warm-up",       "detail": f"1 km easy jog + 4× 20 sec strides.{terrain_note}"},
-            {"label": f"{reps}× 800 m","detail": f"800 m at 5 km race effort / 400 m easy jog recovery. Repeat {reps} times."},
-            {"label": "Cool-down",     "detail": "1 km easy jog + full stretch. Eat and hydrate."},
+            {"label": "Warm-up (10–15 min)",
+             "detail": f"Easy jog to get loose, finishing with 4× 20-sec strides. Your legs should feel springy before you start.{terrain_note}"},
+            {"label": f"{reps} hard efforts",
+             "detail": f"Run hard for 800 m — not a full sprint, more like your 5 km race pace. Jog easily for 400 m to recover. Each rep should feel similar — if the last ones are much harder, you started too fast."},
+            {"label": "Cool-down",
+             "detail": "Easy jog 5–10 min until heart rate comes down. Stretch thoroughly — intervals are high injury risk if you skip this. Eat and hydrate soon."},
         ]
 
     def _long_run_steps(self, km: float, terrain: str) -> list:
-        trail_tip = " Walk all steep uphills — this is correct technique, not weakness." if "trail" in terrain else ""
+        trail_tip = " Walking uphills is smart, not weak — it saves energy for the descent and keeps your heart rate in check." if "trail" in terrain else ""
         return [
-            {"label": "Warm-up",   "detail": "10 min easy walk, then ease into running pace."},
-            {"label": "Long run",  "detail": f"{km:.1f} km at fully easy, conversational pace. Walk breaks every 20–30 min are fine.{trail_tip}"},
-            {"label": "Cool-down", "detail": "10 min walk + thorough stretch (hip flexors, calves, hamstrings)."},
+            {"label": "The golden rule",
+             "detail": "Start slower than feels right. Long runs are ruined by going too hard in the first third. You should feel like you could keep going forever at the start."},
+            {"label": "Managing the middle",
+             "detail": f"Keep HR in easy zone throughout. If you drift into aerobic zone, slow down. Walk breaks are not failure — they let you finish stronger.{trail_tip}"},
+            {"label": "The last km",
+             "detail": "Resist the urge to finish fast. The point of a long run is aerobic time on feet, not pace. Finish the last km at the same effort as the first. Eat within 30–40 min and prioritise sleep tonight."},
         ]
 
     # ── History helpers (change 11) ────────────────────────────────────

@@ -191,11 +191,12 @@
     {% endif %}
     {% if recommendation.target_distance_km and recommendation.target_duration_minutes %}
     <div class="target-item">
-      <div class="target-label">Target pace</div>
+      <div class="target-label">Approx. pace</div>
       <div class="target-value">
         {% set pace = recommendation.target_duration_minutes / recommendation.target_distance_km %}
-        {{ pace | int }}:{{ ((pace % 1) * 60) | int | string }}{% if ((pace % 1) * 60) | int < 10 %}0{% endif %}/km
+        ~{{ pace | int }}:{{ "%02d" | format(((pace % 1) * 60) | int) }}/km
       </div>
+      <div style="font-size:11px;color:var(--c-muted);margin-top:2px;">estimate — HR zone is the real guide</div>
     </div>
     {% else %}
     <div class="target-item">
