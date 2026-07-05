@@ -58,7 +58,7 @@ function connectStrava() {
     client_id:     clientId,
     redirect_uri:  redirectUri,
     response_type: 'code',
-    scope:         'activity:read_all',
+    scope:         'activity:read',
     state:         state,
   });
   window.location.href = 'https://www.strava.com/oauth/authorize?' + params.toString();

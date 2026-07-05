@@ -95,7 +95,7 @@ class StravaAuth:
             "client_id":     client_id,
             "redirect_uri":  REDIRECT_URI,
             "response_type": "code",
-            "scope":         "activity:read_all",
+            "scope":         "activity:read",
         }
         auth_url = STRAVA_AUTH_URL + "?" + urllib.parse.urlencode(params)
 
