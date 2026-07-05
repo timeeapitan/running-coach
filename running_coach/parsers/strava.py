@@ -176,8 +176,11 @@ class StravaAuth:
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return json.loads(resp.read())
-        except Exception:
-            return None
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Strava token request failed with HTTP {e.code}: {body}")
+        except Exception as e:
+            raise RuntimeError(f"Strava token request failed: {e}")
 
 
 class StravaParser:
@@ -226,9 +229,16 @@ class StravaParser:
                 with urllib.request.urlopen(req, timeout=15) as resp:
                     page_data = json.loads(resp.read())
             except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace")
                 if e.code == 401:
-                    raise RuntimeError("Strava token invalid. Run: python run.py connect-strava")
-                raise
+                    raise RuntimeError("Strava token invalid or expired. Please log out and connect Strava again.")
+                if e.code == 403:
+                    raise RuntimeError("Strava denied access. Check that activity:read_all scope is allowed.")
+                if e.code == 429:
+                    raise RuntimeError("Strava rate limit reached. Try again later.")
+                raise RuntimeError(f"Strava activities request failed with HTTP {e.code}: {body}")
+            except Exception as e:
+                raise RuntimeError(f"Strava activities request failed: {e}")
 
             if not page_data:
                 break
@@ -278,7 +288,8 @@ class StravaParser:
                 source="strava",
                 external_id=str(data.get("id", "")),
             )
-        except Exception:
+        except Exception as e:
+            print(f"[STRAVA] skipped one activity because it could not be parsed: {e}", flush=True)
             return None
 
     def describe(self, runs: List[NormalizedRun]) -> str:

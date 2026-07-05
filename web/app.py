@@ -253,10 +253,13 @@ def _load_runs(uid):
     try:
         from running_coach.parsers.strava import StravaParser
         runs = StravaParser(tmp.name).fetch_runs()
-        # Store in cache for subsequent page loads
+        print(f"[STRAVA] fetched {len(runs)} runs", flush=True)
         save_cached_runs(uid, _serialize_runs(runs))
         return runs
-    except Exception:
+    except Exception as e:
+        import traceback
+        print("[STRAVA] fetch failed:", repr(e), flush=True)
+        print(traceback.format_exc(), flush=True)
         return []
     finally:
         os.unlink(tmp.name)
