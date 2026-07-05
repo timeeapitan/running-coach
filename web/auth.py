@@ -98,7 +98,7 @@ def build_auth_url(client_id: str) -> str:
         "client_id":      client_id,
         "redirect_uri":   get_redirect_uri(),
         "response_type":  "code",
-        "approval_prompt":"auto",
+        "approval_prompt":"force",
         "scope":          "read,activity:read_all",
     }
     return STRAVA_AUTH_URL + "?" + urllib.parse.urlencode(params)
