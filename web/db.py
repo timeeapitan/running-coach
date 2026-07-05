@@ -50,7 +50,10 @@ def load_profile(username: str) -> Optional[dict]:
         return None
     d = rows[0].get("profile") or {}
     if isinstance(d, str):
-        d = json.loads(d)
+        try:
+            d = json.loads(d)  # handle legacy double-encoded rows
+        except Exception:
+            d = {}
     # Inject display_name into profile if missing
     if rows[0].get("display_name") and not d.get("name"):
         d["name"] = rows[0]["display_name"]
@@ -61,7 +64,7 @@ def save_profile(username: str, profile_dict: dict) -> None:
         _file_save_profile(username, profile_dict)
         return
     existing = _sb_get("users", f"?username=eq.{username}&select=username")
-    payload  = {"profile": json.dumps(profile_dict),
+    payload  = {"profile": profile_dict,  # stored as jsonb — do not pre-encode
                 "display_name": profile_dict.get("name", username)}
     if existing:
         _sb_patch("users", payload, f"?username=eq.{username}")
@@ -78,7 +81,12 @@ def load_strava_token(username: str) -> Optional[dict]:
     if not rows or not rows[0].get("strava_token"):
         return None
     raw = rows[0]["strava_token"]
-    return json.loads(raw) if isinstance(raw, str) else raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)  # handle legacy double-encoded rows
+        except Exception:
+            return None
+    return raw
 
 def save_strava_token(username: str, token: dict,
                       display_name: str = "", athlete_data: dict = None) -> None:
@@ -90,7 +98,7 @@ def save_strava_token(username: str, token: dict,
                " " + (athlete_data or {}).get("lastname", "")
     avatar   = (athlete_data or {}).get("profile_medium", "")
     payload  = {
-        "strava_token":  json.dumps(token),
+        "strava_token":  token,  # stored as jsonb — do not pre-encode
         "display_name":  name.strip() or username,
         "avatar_url":    avatar,
     }
@@ -126,7 +134,8 @@ def load_feedback(username: str) -> dict:
         key = row["date"]
         val = row["data"]
         if isinstance(val, str):
-            val = json.loads(val)
+            try: val = json.loads(val)
+            except: continue
         val["date"] = datetime.fromisoformat(val["date"])
         try:
             result[key] = ManualFeedback(**{
@@ -259,7 +268,10 @@ def load_cached_summary(username: str) -> Optional[dict]:
                        f"?username=eq.{username}&date=eq.{today}&select=summary")
         if rows and rows[0].get("summary"):
             raw = rows[0]["summary"]
-            return json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(raw, str):
+                try: return json.loads(raw)
+                except: return None
+            return raw
     except Exception:
         pass
     return None
@@ -332,7 +344,10 @@ def load_cached_runs(username: str) -> Optional[list]:
             if age_minutes > RUNS_CACHE_TTL_MINUTES:
                 return None
         raw = rows[0]["runs"]
-        return json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(raw, str):
+            try: return json.loads(raw)
+            except: return None
+        return raw
     except Exception as e:
         print(f"[cache] load_cached_runs error: {e}")
         return None
@@ -346,7 +361,7 @@ def save_cached_runs(username: str, runs_data: list) -> None:
         _sb_delete("runs_cache", f"?username=eq.{username}")
         _sb_insert("runs_cache", {
             "username": username,
-            "runs": json.dumps(runs_data),
+            "runs": runs_data,  # jsonb — no pre-encoding
         })
     except Exception as e:
         print(f"[cache] save_cached_runs error (non-fatal): {e}")
