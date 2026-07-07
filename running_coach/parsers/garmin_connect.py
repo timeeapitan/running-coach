@@ -1,13 +1,17 @@
 """
 Garmin Connect online parser.
 
-This uses the unofficial `garminconnect` Python package to log in to your
-Garmin Connect account and fetch recent activities. It is intended for personal
-use, not for a public multi-user app.
+Preferred deployment mode for this personal app:
+  - create a Garth session locally with garth.save(...)
+  - upload oauth1_token.json and oauth2_token.json as Render Secret Files
+  - Render exposes them at /etc/secrets/oauth1_token.json and /etc/secrets/oauth2_token.json
+
+This avoids storing your Garmin password in Render or Supabase.
 """
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -25,35 +29,36 @@ RUN_TYPES = {
     "virtual_run": ActivityType.TREADMILL_RUN,
 }
 
+DEFAULT_GARTH_SESSION_DIR = os.environ.get("GARTH_SESSION_DIR", "/etc/secrets")
+
+
+def garth_secret_files_exist(session_dir: str = DEFAULT_GARTH_SESSION_DIR) -> bool:
+    """True when Render Secret Files contain the two Garth token files."""
+    return (
+        os.path.exists(os.path.join(session_dir, "oauth1_token.json"))
+        and os.path.exists(os.path.join(session_dir, "oauth2_token.json"))
+    )
+
 
 class GarminConnectParser:
     """Fetches activities from Garmin Connect and converts runs to NormalizedRun."""
 
-    def __init__(self, email: str, password: str):
+    def __init__(self, email: str | None = None, password: str | None = None,
+                 session_dir: str = DEFAULT_GARTH_SESSION_DIR):
         self.email = email
         self.password = password
+        self.session_dir = session_dir
 
     def fetch_runs(self, max_runs: int = 200) -> List[NormalizedRun]:
-        try:
-            from garminconnect import Garmin
-        except ImportError as exc:
+        if garth_secret_files_exist(self.session_dir):
+            activities = self._fetch_with_garth(max_runs)
+        elif self.email and self.password:
+            activities = self._fetch_with_garminconnect(max_runs)
+        else:
             raise RuntimeError(
-                "Missing dependency: garminconnect. Add it to requirements.txt and redeploy."
-            ) from exc
-
-        client = Garmin(self.email, self.password)
-        try:
-            client.login()
-        except Exception as exc:
-            raise RuntimeError(
-                "Garmin login failed. Check GARMIN_EMAIL/GARMIN_PASSWORD or the credentials entered in the app. "
-                "If Garmin asks for MFA/2FA, log in once in the browser and try again, or use app credentials without MFA."
-            ) from exc
-
-        try:
-            activities = client.get_activities(0, max_runs)
-        except Exception as exc:
-            raise RuntimeError(f"Could not fetch Garmin activities: {exc}") from exc
+                "No Garmin auth found. Upload oauth1_token.json and oauth2_token.json as Render Secret Files, "
+                "or set GARMIN_EMAIL/GARMIN_PASSWORD as a fallback."
+            )
 
         runs: List[NormalizedRun] = []
         for item in activities or []:
@@ -63,6 +68,47 @@ class GarminConnectParser:
 
         runs.sort(key=lambda r: r.date)
         return runs
+
+    def _fetch_with_garth(self, max_runs: int) -> List[Dict[str, Any]]:
+        try:
+            import garth
+        except ImportError as exc:
+            raise RuntimeError("Missing dependency: garth. Add it to requirements.txt and redeploy.") from exc
+
+        try:
+            garth.resume(self.session_dir)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not load Garmin session from {self.session_dir}. "
+                "Make sure Render Secret Files are named oauth1_token.json and oauth2_token.json. "
+                "If the session expired, regenerate the files locally and replace them in Render."
+            ) from exc
+
+        path = f"/activitylist-service/activities/search/activities?start=0&limit={int(max_runs)}"
+        try:
+            return garth.connectapi(path) or []
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not fetch Garmin activities using the saved Garth session. "
+                "The session may have expired; regenerate oauth1_token.json and oauth2_token.json."
+            ) from exc
+
+    def _fetch_with_garminconnect(self, max_runs: int) -> List[Dict[str, Any]]:
+        try:
+            from garminconnect import Garmin
+        except ImportError as exc:
+            raise RuntimeError("Missing dependency: garminconnect. Add it to requirements.txt and redeploy.") from exc
+
+        client = Garmin(self.email, self.password)
+        try:
+            client.login()
+        except Exception as exc:
+            raise RuntimeError("Garmin login failed. Check Garmin credentials or use Render Secret Files.") from exc
+
+        try:
+            return client.get_activities(0, max_runs) or []
+        except Exception as exc:
+            raise RuntimeError(f"Could not fetch Garmin activities: {exc}") from exc
 
     def _parse_activity(self, data: Dict[str, Any]) -> Optional[NormalizedRun]:
         type_key = self._activity_type_key(data)

@@ -23,35 +23,43 @@
     <div class="card-title">Connect Garmin Connect</div>
     <p style="font-size:13px;color:var(--c-muted);margin-bottom:1.25rem;line-height:1.6;">
       This personal version syncs your runs directly from Garmin Connect using the unofficial
-      <strong>garminconnect</strong> Python library. No Strava API subscription is needed.
+      <strong>Garth/Garmin Connect</strong>. No Strava API subscription is needed.
     </p>
 
-    <form method="POST" action="/auth/credentials">
-      <div class="form-group">
-        <label>Garmin email</label>
-        <input type="email" name="email" placeholder="you@example.com"
-               autocomplete="username" autocorrect="off" spellcheck="false">
-      </div>
-      <div class="form-group">
-        <label>Garmin password</label>
-        <input type="password" name="password" placeholder="Garmin Connect password"
-               autocomplete="current-password" autocorrect="off" spellcheck="false">
-        <p style="font-size:11px;color:var(--c-muted);margin-top:4px;line-height:1.5;">
-          For a personal app, the credentials are saved so the server can refresh your activities.
-          You can alternatively set GARMIN_EMAIL and GARMIN_PASSWORD in Render environment variables.
-        </p>
-      </div>
-      <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">
-        Connect Garmin →
-      </button>
-    </form>
-
     {% if host_credentials %}
-    <div style="margin-top:1rem;padding-top:1rem;border-top:0.5px solid var(--c-border);text-align:center;">
-      <p style="font-size:12px;color:var(--c-muted);margin-bottom:8px;">Environment credentials found on Render.</p>
-      <a href="/auth/host" class="btn btn-secondary btn-sm">Sign in with Render Garmin credentials</a>
+    <div style="margin-top:1rem;text-align:center;">
+      <p style="font-size:12px;color:var(--c-muted);margin-bottom:8px;line-height:1.5;">
+        Garmin Secret Files found on Render. Your Garmin password is not stored in this app.
+      </p>
+      <a href="/auth/host" class="btn btn-primary" style="width:100%;text-align:center;">Sign in with Garmin session →</a>
+    </div>
+    {% else %}
+    <div class="warning" style="margin-bottom:1rem;line-height:1.5;">
+      Add Render Secret Files named <strong>oauth1_token.json</strong> and <strong>oauth2_token.json</strong>, then redeploy.
     </div>
     {% endif %}
+
+    <details style="margin-top:1rem;">
+      <summary style="font-size:12px;color:var(--c-muted);cursor:pointer;">Emergency fallback: sign in with Garmin password</summary>
+      <form method="POST" action="/auth/credentials" style="margin-top:1rem;">
+        <div class="form-group">
+          <label>Garmin email</label>
+          <input type="email" name="email" placeholder="you@example.com"
+                 autocomplete="username" autocorrect="off" spellcheck="false">
+        </div>
+        <div class="form-group">
+          <label>Garmin password</label>
+          <input type="password" name="password" placeholder="Garmin Connect password"
+                 autocomplete="current-password" autocorrect="off" spellcheck="false">
+          <p style="font-size:11px;color:var(--c-muted);margin-top:4px;line-height:1.5;">
+            This fallback stores credentials in the app database. Prefer Secret Files.
+          </p>
+        </div>
+        <button type="submit" class="btn btn-secondary" style="width:100%;text-align:center;">
+          Connect with password
+        </button>
+      </form>
+    </details>
   </div>
 
 </div>

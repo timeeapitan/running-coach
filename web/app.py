@@ -12,7 +12,7 @@ sys.path.insert(0, ROOT)
 
 from web.auth import (
     login_required, current_user_id, current_user_name, current_user_avatar,
-    host_credentials_set, get_host_garmin_credentials,
+    host_credentials_set, get_host_garmin_credentials, using_garth_secret_files,
 )
 from web.db import (
     load_profile, save_profile, load_strava_token, save_strava_token,
@@ -57,11 +57,57 @@ def auth_credentials():
 
 @app.route("/auth/host")
 def auth_host():
-    """Sign in using GARMIN_EMAIL/GARMIN_PASSWORD from Render environment."""
+    """Sign in using Garmin Render Secret Files, or env vars as fallback."""
+    if using_garth_secret_files():
+        return _finish_garmin_secret_login()
     email, password = get_host_garmin_credentials()
     if not email or not password:
         return redirect(url_for("login"))
     return _finish_garmin_login(email, password)
+
+
+def _finish_garmin_secret_login():
+    """Verify Garmin secret-file session and start the personal app session."""
+    from running_coach.parsers.garmin_connect import GarminConnectParser
+
+    username = os.environ.get("RUNNING_COACH_USER_ID", "garmin-secret-user")
+    name = os.environ.get("RUNNING_COACH_USER_NAME", "Runner")
+
+    try:
+        GarminConnectParser().fetch_runs(max_runs=1)
+    except Exception as e:
+        import traceback
+        print("GARMIN SECRET SESSION ERROR:", traceback.format_exc(), flush=True)
+        return render_template("login.html",
+            host_credentials=host_credentials_set(),
+            error=f"Could not connect to Garmin using Render Secret Files: {e}")
+
+    token = {"provider": "garmin_session"}
+
+    try:
+        save_strava_token(username, token, display_name=name, athlete_data={})
+    except Exception as e:
+        import traceback
+        print("SUPABASE SAVE ERROR:", traceback.format_exc(), flush=True)
+        return render_template("login.html",
+            host_credentials=host_credentials_set(),
+            error=f"Database error: {e} — Have you run setup_db.sql in Supabase?")
+
+    if not load_profile(username):
+        from running_coach.schemas.enums import FitnessLevel
+        import dataclasses
+        p = RunnerProfile(name=name, fitness_level=FitnessLevel.INTERMEDIATE, runs_per_week=3)
+        d = dataclasses.asdict(p)
+        d["fitness_level"] = p.fitness_level.value
+        save_profile(username, d)
+
+    session.permanent = True
+    session["user_id"] = username
+    session["user_name"] = name
+    session["user_avatar"] = ""
+
+    invalidate_runs_cache(username)
+    return redirect(url_for("dashboard"))
 
 
 def _finish_garmin_login(email: str, password: str):
@@ -202,13 +248,16 @@ def _load_runs(uid):
     provider = token.get("provider", "strava")
 
     try:
-        if provider == "garmin":
+        if provider in ("garmin", "garmin_session"):
             from running_coach.parsers.garmin_connect import GarminConnectParser
-            email = token.get("email")
-            password = token.get("password")
-            if not email or not password:
-                raise RuntimeError("Missing Garmin credentials in saved user token.")
-            runs = GarminConnectParser(email, password).fetch_runs(max_runs=200)
+            if provider == "garmin_session":
+                runs = GarminConnectParser().fetch_runs(max_runs=200)
+            else:
+                email = token.get("email")
+                password = token.get("password")
+                if not email or not password:
+                    raise RuntimeError("Missing Garmin credentials in saved user token.")
+                runs = GarminConnectParser(email, password).fetch_runs(max_runs=200)
             print(f"[GARMIN] fetched {len(runs)} runs", flush=True)
         else:
             # Backwards-compatible fallback for old Strava users.
