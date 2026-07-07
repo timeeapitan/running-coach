@@ -2,7 +2,7 @@
 -- Run this once in the Supabase SQL editor
 
 -- Users table
--- username = Strava athlete ID (e.g. "12345678")
+-- username = user id / Garmin email (e.g. "12345678")
 create table if not exists users (
   username      text primary key,
   profile       jsonb,
@@ -62,7 +62,7 @@ alter table daily_cache enable row level security;
 create policy "service role full access on daily_cache"
   on daily_cache for all using (true);
 
--- Runs cache — stores Strava runs per user, TTL managed in app code
+-- Runs cache — stores activity runs per user, TTL managed in app code
 create table if not exists runs_cache (
   id          bigserial primary key,
   username    text not null references users(username) on delete cascade,

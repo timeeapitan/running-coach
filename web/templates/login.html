@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--c-bg);">
-<div style="width:100%;max-width:400px;padding:1.5rem;">
+<div style="width:100%;max-width:430px;padding:1.5rem;">
 
   <div style="text-align:center;margin-bottom:2rem;">
     <div style="font-size:32px;font-weight:700;color:var(--c-teal);letter-spacing:-1px;margin-bottom:4px;">RC</div>
@@ -20,62 +20,38 @@
   {% endif %}
 
   <div class="card">
-
-    {% if step == 'credentials' or not step %}
-
-    <!-- Step 1: Enter Strava API credentials -->
-    <div class="card-title">Connect your Strava account</div>
-    <p style="font-size:13px;color:var(--c-muted);margin-bottom:1.25rem;">
-      Each person needs a free Strava API app. This takes about 2 minutes and you only do it once.
+    <div class="card-title">Connect Garmin Connect</div>
+    <p style="font-size:13px;color:var(--c-muted);margin-bottom:1.25rem;line-height:1.6;">
+      This personal version syncs your runs directly from Garmin Connect using the unofficial
+      <strong>garminconnect</strong> Python library. No Strava API subscription is needed.
     </p>
-
-    <details style="margin-bottom:1.25rem;">
-      <summary style="font-size:13px;font-weight:500;cursor:pointer;color:var(--c-teal);">
-        How to create your free Strava API app ›
-      </summary>
-      <div style="margin-top:10px;background:var(--c-bg);border-radius:var(--radius-sm);padding:0.85rem;font-size:13px;color:var(--c-muted);line-height:1.8;">
-        <ol style="padding-left:1.2rem;">
-          <li>Go to <a href="https://www.strava.com/settings/api" target="_blank" style="color:var(--c-teal);">strava.com/settings/api</a></li>
-          <li>Fill in:<br>
-            Name: <strong>Running Coach</strong><br>
-            Category: <strong>Other</strong><br>
-            Website: <strong>http://localhost</strong><br>
-            Callback Domain: <strong>{{ callback_domain }}</strong>
-          </li>
-          <li>Click Create</li>
-          <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> shown</li>
-        </ol>
-      </div>
-    </details>
 
     <form method="POST" action="/auth/credentials">
       <div class="form-group">
-        <label>Client ID</label>
-        <input type="text" name="client_id" placeholder="e.g. 12345"
-               value="{{ prefill_id or '' }}" autocomplete="off" autocorrect="off" spellcheck="false">
+        <label>Garmin email</label>
+        <input type="email" name="email" placeholder="you@example.com"
+               autocomplete="username" autocorrect="off" spellcheck="false">
       </div>
       <div class="form-group">
-        <label>Client Secret</label>
-        <input type="text" name="client_secret" placeholder="long string from Strava"
-               autocomplete="off" autocorrect="off" spellcheck="false">
-        <p style="font-size:11px;color:var(--c-muted);margin-top:4px;">
-          Stored only in your browser session until you authorize — then saved securely to the database.
+        <label>Garmin password</label>
+        <input type="password" name="password" placeholder="Garmin Connect password"
+               autocomplete="current-password" autocorrect="off" spellcheck="false">
+        <p style="font-size:11px;color:var(--c-muted);margin-top:4px;line-height:1.5;">
+          For a personal app, the credentials are saved so the server can refresh your activities.
+          You can alternatively set GARMIN_EMAIL and GARMIN_PASSWORD in Render environment variables.
         </p>
       </div>
       <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">
-        Continue to Strava →
+        Connect Garmin →
       </button>
     </form>
 
     {% if host_credentials %}
     <div style="margin-top:1rem;padding-top:1rem;border-top:0.5px solid var(--c-border);text-align:center;">
-      <p style="font-size:12px;color:var(--c-muted);margin-bottom:8px;">Are you the app owner?</p>
-      <a href="/auth/callback-start" class="btn btn-secondary btn-sm">Sign in with host credentials</a>
+      <p style="font-size:12px;color:var(--c-muted);margin-bottom:8px;">Environment credentials found on Render.</p>
+      <a href="/auth/host" class="btn btn-secondary btn-sm">Sign in with Render Garmin credentials</a>
     </div>
     {% endif %}
-
-    {% endif %}
-
   </div>
 
 </div>

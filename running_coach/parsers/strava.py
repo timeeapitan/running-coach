@@ -95,7 +95,7 @@ class StravaAuth:
             "client_id":     client_id,
             "redirect_uri":  REDIRECT_URI,
             "response_type": "code",
-            "scope":         "read,activity:read",
+            "scope":         "activity:read_all",
         }
         auth_url = STRAVA_AUTH_URL + "?" + urllib.parse.urlencode(params)
 
@@ -233,7 +233,7 @@ class StravaParser:
                 if e.code == 401:
                     raise RuntimeError("Strava token invalid or expired. Please log out and connect Strava again.")
                 if e.code == 403:
-                    raise RuntimeError("Strava denied access. Check that activity:read scope is allowed.")
+                    raise RuntimeError("Strava denied access. Check that activity:read_all scope is allowed.")
                 if e.code == 429:
                     raise RuntimeError("Strava rate limit reached. Try again later.")
                 raise RuntimeError(f"Strava activities request failed with HTTP {e.code}: {body}")

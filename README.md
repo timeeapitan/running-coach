@@ -1,3 +1,22 @@
+# Running Coach — Garmin Connect personal version
+
+This version syncs activities from Garmin Connect using the unofficial `garminconnect` Python package, so it does not depend on the Strava API subscription change.
+
+## Render setup
+
+Add these environment variables on Render if you want one-click login:
+
+```
+GARMIN_EMAIL=your_garmin_email
+GARMIN_PASSWORD=your_garmin_password
+```
+
+Then deploy and open `/refresh` to force a new Garmin sync.
+
+> Note: this is intended for personal use. Garmin does not provide a public free personal API; `garminconnect` uses an unofficial Garmin Connect login flow and may break if Garmin changes their site.
+
+---
+
 # Running Coach
 
 Your personal running coach. Connects to Strava, analyses your training, and recommends your next run — accessible from your phone browser.

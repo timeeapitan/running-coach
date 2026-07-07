@@ -1,5 +1,5 @@
 """
-Running Coach — Flask web application with Strava authentication.
+Running Coach — Flask web application with Garmin Connect sync.
 """
 
 import json, os, sys, tempfile, time
@@ -12,8 +12,7 @@ sys.path.insert(0, ROOT)
 
 from web.auth import (
     login_required, current_user_id, current_user_name, current_user_avatar,
-    build_auth_url, exchange_code, refresh_token,
-    get_client_credentials, host_credentials_set, get_redirect_uri,
+    host_credentials_set, get_host_garmin_credentials,
 )
 from web.db import (
     load_profile, save_profile, load_strava_token, save_strava_token,
@@ -41,118 +40,76 @@ _MODEL_CACHE = {}
 def login():
     if session.get("user_id"):
         return redirect(url_for("dashboard"))
-    # Pre-fill client_id if user previously entered it
-    prefill_id = session.get("pending_client_id", "")
-    return render_template("login.html",
-        host_credentials=host_credentials_set(),
-        callback_domain=_get_callback_domain(),
-        prefill_id=prefill_id,
-    )
+    return render_template("login.html", host_credentials=host_credentials_set())
 
 
 @app.route("/auth/credentials", methods=["POST"])
 def auth_credentials():
-    """Step 1: user submits their Strava API credentials."""
-    client_id     = request.form.get("client_id", "").strip()
-    client_secret = request.form.get("client_secret", "").strip()
-    if not client_id or not client_secret:
+    """Sign in with Garmin Connect credentials and save them for future syncs."""
+    email = request.form.get("email", "").strip()
+    password = request.form.get("password", "").strip()
+    if not email or not password:
         return render_template("login.html",
             host_credentials=host_credentials_set(),
-            callback_domain=_get_callback_domain(),
-            error="Please enter both Client ID and Client Secret.",
-        )
-    # Store in session temporarily — used by auth_callback_start
-    session["pending_client_id"]     = client_id
-    session["pending_client_secret"] = client_secret
-    return redirect(url_for("auth_callback_start"))
+            error="Please enter both Garmin email and password.")
+    return _finish_garmin_login(email, password)
 
 
-@app.route("/auth/callback-start")
-def auth_callback_start():
-    """Redirect to Strava using the pending or host credentials."""
-    client_id, _ = get_client_credentials()
-    if not client_id:
+@app.route("/auth/host")
+def auth_host():
+    """Sign in using GARMIN_EMAIL/GARMIN_PASSWORD from Render environment."""
+    email, password = get_host_garmin_credentials()
+    if not email or not password:
         return redirect(url_for("login"))
-    return redirect(build_auth_url(client_id))
+    return _finish_garmin_login(email, password)
 
 
-@app.route("/auth/callback")
-def auth_callback():
-    """Strava redirects here after the user clicks Allow."""
-    error = request.args.get("error")
-    if error:
-        return render_template("login.html",
-            host_credentials=host_credentials_set(),
-            callback_domain=_get_callback_domain(),
-            error="Strava authorization was denied. Please try again.")
+def _finish_garmin_login(email: str, password: str):
+    """Verify Garmin credentials, store them, and start the app session."""
+    from running_coach.parsers.garmin_connect import GarminConnectParser
 
-    code = request.args.get("code")
-    if not code:
-        return redirect(url_for("login"))
-
-    # Retrieve the credentials used for this OAuth flow
-    client_id, client_secret = get_client_credentials()
-    if not client_id or not client_secret:
-        return redirect(url_for("login"))
+    username = email.strip().lower()
+    name = username.split("@")[0].replace(".", " ").title()
 
     try:
-        token_data = exchange_code(code, client_id, client_secret)
+        # Verify that login + activities endpoint works before saving credentials.
+        GarminConnectParser(email, password).fetch_runs(max_runs=1)
     except Exception as e:
         import traceback
-        print("STRAVA EXCHANGE ERROR:", traceback.format_exc())
+        print("GARMIN LOGIN ERROR:", traceback.format_exc(), flush=True)
         return render_template("login.html",
             host_credentials=host_credentials_set(),
-            callback_domain=_get_callback_domain(),
-            error=f"Could not connect to Strava: {e}")
+            error=f"Could not connect to Garmin: {e}")
 
-    athlete    = token_data.get("athlete", {})
-    athlete_id = str(athlete.get("id", ""))
-    if not athlete_id:
-        return render_template("login.html",
-            host_credentials=host_credentials_set(),
-            callback_domain=_get_callback_domain(),
-            error="Could not get athlete ID from Strava.")
-
-    first  = athlete.get("firstname", "")
-    last   = athlete.get("lastname",  "")
-    name   = f"{first} {last}".strip() or athlete_id
-    avatar = athlete.get("profile_medium", "")
-
-    # Save token with their own client credentials
-    clean_token = {k: v for k, v in token_data.items() if k != "athlete"}
-    clean_token["client_id"]     = client_id
-    clean_token["client_secret"] = client_secret
+    token = {
+        "provider": "garmin",
+        "email": email,
+        "password": password,
+    }
 
     try:
-        save_strava_token(athlete_id, clean_token,
-                          display_name=name, athlete_data=athlete)
+        save_strava_token(username, token, display_name=name, athlete_data={})
     except Exception as e:
         import traceback
-        print("SUPABASE SAVE ERROR:", traceback.format_exc())
+        print("SUPABASE SAVE ERROR:", traceback.format_exc(), flush=True)
         return render_template("login.html",
             host_credentials=host_credentials_set(),
-            callback_domain=_get_callback_domain(),
             error=f"Database error: {e} — Have you run setup_db.sql in Supabase?")
 
-    # Create a default profile if this is their first login
-    if not load_profile(athlete_id):
+    if not load_profile(username):
         from running_coach.schemas.enums import FitnessLevel
         import dataclasses
-        p = RunnerProfile(name=name, fitness_level=FitnessLevel.INTERMEDIATE,
-                          runs_per_week=3)
+        p = RunnerProfile(name=name, fitness_level=FitnessLevel.INTERMEDIATE, runs_per_week=3)
         d = dataclasses.asdict(p)
         d["fitness_level"] = p.fitness_level.value
-        save_profile(athlete_id, d)
+        save_profile(username, d)
 
-    # Clear pending credentials — now stored in DB against athlete_id
-    session.pop("pending_client_id", None)
-    session.pop("pending_client_secret", None)
+    session.permanent = True
+    session["user_id"] = username
+    session["user_name"] = name
+    session["user_avatar"] = ""
 
-    session.permanent      = True
-    session["user_id"]     = athlete_id
-    session["user_name"]   = name
-    session["user_avatar"] = avatar
-
+    invalidate_runs_cache(username)
     return redirect(url_for("dashboard"))
 
 
@@ -165,7 +122,7 @@ def logout():
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_callback_domain() -> str:
-    """Return the domain to put in Strava Authorization Callback Domain field."""
+    """Return the current app domain."""
     render_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
     if render_url:
         return render_url.replace("https://", "").replace("http://", "")
@@ -207,6 +164,7 @@ def _serialize_runs(runs) -> list:
         "elevation_gain_m":   r.elevation_gain_m,
         "cadence":            r.cadence,
         "source":             r.source,
+        "external_id":        r.external_id,
     } for r in runs]
 
 def _deserialize_runs(data: list):
@@ -225,44 +183,55 @@ def _deserialize_runs(data: list):
                 elevation_gain_m=d.get("elevation_gain_m"),
                 cadence=d.get("cadence"),
                 source=d.get("source", "cache"),
+                external_id=d.get("external_id"),
             ))
         except Exception:
             pass
     return runs
 
 def _load_runs(uid):
-    # Try cache first — avoids Strava API call on every page
+    # Try cache first — avoids calling Garmin Connect on every page.
     cached = load_cached_runs(uid)
     if cached is not None:
         return _deserialize_runs(cached)
 
-    # Cache miss — fetch from Strava
     token = load_strava_token(uid)
     if not token:
         return []
 
-    if token.get("expires_at", 0) < time.time() + 300:
-        try:
-            token = refresh_token(token)
-            save_strava_token(uid, token)
-        except Exception:
-            pass
+    provider = token.get("provider", "strava")
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w")
-    json.dump(token, tmp); tmp.close()
     try:
-        from running_coach.parsers.strava import StravaParser
-        runs = StravaParser(tmp.name).fetch_runs()
-        print(f"[STRAVA] fetched {len(runs)} runs", flush=True)
+        if provider == "garmin":
+            from running_coach.parsers.garmin_connect import GarminConnectParser
+            email = token.get("email")
+            password = token.get("password")
+            if not email or not password:
+                raise RuntimeError("Missing Garmin credentials in saved user token.")
+            runs = GarminConnectParser(email, password).fetch_runs(max_runs=200)
+            print(f"[GARMIN] fetched {len(runs)} runs", flush=True)
+        else:
+            # Backwards-compatible fallback for old Strava users.
+            if token.get("expires_at", 0) < time.time() + 300:
+                from web.auth import refresh_token
+                token = refresh_token(token)
+                save_strava_token(uid, token)
+            tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w")
+            json.dump(token, tmp); tmp.close()
+            try:
+                from running_coach.parsers.strava import StravaParser
+                runs = StravaParser(tmp.name).fetch_runs()
+                print(f"[STRAVA] fetched {len(runs)} runs", flush=True)
+            finally:
+                os.unlink(tmp.name)
+
         save_cached_runs(uid, _serialize_runs(runs))
         return runs
     except Exception as e:
         import traceback
-        print("[STRAVA] fetch failed:", repr(e), flush=True)
+        print("[ACTIVITY SYNC] fetch failed:", repr(e), flush=True)
         print(traceback.format_exc(), flush=True)
         return []
-    finally:
-        os.unlink(tmp.name)
 
 def _get_coach(uid, profile):
     return RunningCoach(profile, model_dir=_get_model_dir(uid))
@@ -490,6 +459,7 @@ def refresh_summary():
     if not profile:
         return redirect(url_for("dashboard"))
 
+    invalidate_runs_cache(uid)  # force fresh Garmin fetch now
     runs     = _load_runs(uid)
     feedback = load_feedback(uid)
     coach    = _get_coach(uid, profile)
@@ -502,8 +472,6 @@ def refresh_summary():
 
     summary = build_daily_summary(runs, profile, analysis, rec, feedback)
     save_cached_summary(uid, summary)  # overwrites today's cache
-    invalidate_runs_cache(uid)  # force fresh Strava fetch next open
-
     return redirect(url_for("dashboard"))
 
 

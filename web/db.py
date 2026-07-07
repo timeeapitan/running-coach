@@ -1,7 +1,7 @@
 """
 Database layer — Supabase for production, local files for development.
 
-Username convention: Strava athlete ID as a string (e.g. "12345678").
+Username convention: user id / Garmin email as a string (e.g. "12345678").
 This is set once during OAuth and never changes.
 """
 
@@ -72,7 +72,7 @@ def save_profile(username: str, profile_dict: dict) -> None:
         _sb_insert("users", {"username": username, **payload})
 
 
-# ── Strava token ──────────────────────────────────────────────────────────────
+# ── activity provider credentials ──────────────────────────────────────────────────────────────
 
 def load_strava_token(username: str) -> Optional[dict]:
     if not USE_DB:
@@ -319,7 +319,7 @@ def _file_save_cache(username: str, today: str, summary: dict) -> None:
 
 
 # ── Runs cache ────────────────────────────────────────────────────────────────
-# Caches Strava runs in Supabase so navigation does not hit the Strava API
+# Caches activity runs in Supabase so navigation does not hit the activity provider
 # on every page. TTL is 2 hours. Invalidated on /refresh.
 
 RUNS_CACHE_TTL_MINUTES = 120
