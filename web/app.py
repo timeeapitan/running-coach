@@ -270,10 +270,18 @@ def _load_runs(uid, force=False, auto_fetch=False):
         return []
 
     try:
+        print(f"[GARMIN SYNC] fetching runs for {uid} (force={force}, auto_fetch={auto_fetch})", flush=True)
         runs = _get_garmin_parser(uid).fetch_runs(max_runs=200)
-        print(f"[GARMIN] fetched {len(runs)} runs", flush=True)
-        save_cached_runs(uid, _serialize_runs(runs))
-        return runs
+        print(f"[GARMIN SYNC] parsed {len(runs)} Garmin runs", flush=True)
+
+        if runs:
+            saved = save_cached_runs(uid, _serialize_runs(runs))
+            print(f"[GARMIN SYNC] runs_cache save result: {saved}", flush=True)
+            return runs
+
+        # Do not wipe a previously good cache with an empty Garmin response.
+        print("[GARMIN SYNC] Garmin returned 0 parsed runs; keeping existing cache if available", flush=True)
+        return _deserialize_runs(cached) if cached is not None else []
     except Exception as e:
         import traceback
         print("[GARMIN SYNC] fetch failed:", repr(e), flush=True)
@@ -630,6 +638,23 @@ def refresh_summary():
     summary = build_daily_summary(runs, profile, analysis, rec, feedback)
     save_cached_summary(uid, summary)  # overwrites today's cache
     return redirect(url_for("dashboard"))
+
+
+@app.route("/api/cache-status")
+@login_required
+def api_cache_status():
+    uid = current_user_id()
+    cached = load_cached_runs(uid)
+    raw_daily = load_daily_cache_raw(uid) or {}
+    return jsonify({
+        "user_id": uid,
+        "runs_cache_count": len(cached or []),
+        "has_runs_cache": cached is not None,
+        "has_daily_cache": bool(raw_daily),
+        "daily_cache_keys": sorted(list(raw_daily.keys())) if isinstance(raw_daily, dict) else [],
+        "watch_cached_at": raw_daily.get("watch_cached_at") if isinstance(raw_daily, dict) else None,
+        "summary_cached_at": raw_daily.get("summary_cached_at") if isinstance(raw_daily, dict) else None,
+    })
 
 
 @app.route("/api/status")

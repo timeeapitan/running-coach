@@ -23,7 +23,9 @@ RUN_TYPES = {
     "running": ActivityType.OUTDOOR_RUN,
     "run": ActivityType.OUTDOOR_RUN,
     "street_running": ActivityType.OUTDOOR_RUN,
+    "road_running": ActivityType.OUTDOOR_RUN,
     "track_running": ActivityType.OUTDOOR_RUN,
+    "generic_running": ActivityType.OUTDOOR_RUN,
     "trail_running": ActivityType.TRAIL_RUN,
     "treadmill_running": ActivityType.TREADMILL_RUN,
     "indoor_running": ActivityType.TREADMILL_RUN,
@@ -58,12 +60,24 @@ class GarminConnectParser:
 
     def fetch_runs(self, max_runs: int = 200) -> List[NormalizedRun]:
         activities = self._fetch_activities(max_runs)
+        print(f"[GARMIN] raw activities returned: {len(activities or [])}", flush=True)
+
         runs: List[NormalizedRun] = []
+        skipped_types: dict[str, int] = {}
+        parse_errors = 0
+
         for item in activities or []:
-            run = self._parse_activity(item)
+            type_key = self._activity_type_key(item if isinstance(item, dict) else {})
+            run = self._parse_activity(item) if isinstance(item, dict) else None
             if run:
                 runs.append(run)
+            else:
+                skipped_types[type_key or "unknown"] = skipped_types.get(type_key or "unknown", 0) + 1
+
         runs.sort(key=lambda r: r.date)
+        print(f"[GARMIN] parsed runs: {len(runs)}", flush=True)
+        if skipped_types:
+            print(f"[GARMIN] skipped activity types/sample: {dict(list(skipped_types.items())[:8])}", flush=True)
         return runs
 
     def fetch_daily_health(self, date=None) -> dict:
@@ -306,15 +320,34 @@ class GarminConnectParser:
             return None
 
         try:
-            date = self._parse_date(data.get("startTimeLocal") or data.get("startTimeGMT"))
-            distance_km = self._number(data.get("distance"), 0.0) / 1000.0
-            duration_min = self._number(data.get("duration"), 0.0) / 60.0
+            date = self._parse_date(
+                data.get("startTimeLocal")
+                or data.get("startTimeGMT")
+                or data.get("beginTimestamp")
+                or data.get("startTime")
+            )
+            distance_m = self._number(
+                data.get("distance")
+                or data.get("distanceInMeters")
+                or data.get("activityDistance")
+                or data.get("sumDistance"),
+                0.0,
+            )
+            duration_s = self._number(
+                data.get("duration")
+                or data.get("durationInSeconds")
+                or data.get("elapsedDuration")
+                or data.get("movingDuration"),
+                0.0,
+            )
+            distance_km = distance_m / 1000.0
+            duration_min = duration_s / 60.0
             if distance_km <= 0 or duration_min <= 0:
                 return None
 
-            avg_hr = self._optional_number(data.get("averageHR") or data.get("avgHr"))
-            max_hr = self._optional_number(data.get("maxHR") or data.get("maxHr"))
-            elevation = self._optional_number(data.get("elevationGain") or data.get("totalAscent"))
+            avg_hr = self._optional_number(data.get("averageHR") or data.get("avgHr") or data.get("averageHeartRate"))
+            max_hr = self._optional_number(data.get("maxHR") or data.get("maxHr") or data.get("maxHeartRate"))
+            elevation = self._optional_number(data.get("elevationGain") or data.get("totalAscent") or data.get("elevationGainInMeters"))
             cadence = self._optional_int(
                 data.get("averageRunningCadenceInStepsPerMinute")
                 or data.get("averageRunCadence")
