@@ -12,7 +12,7 @@ sys.path.insert(0, ROOT)
 
 from web.auth import (
     login_required, current_user_id, current_user_name, current_user_avatar,
-    host_credentials_set, get_host_garmin_credentials, using_garth_secret_files,
+    host_credentials_set, get_host_garmin_credentials,
 )
 from web.db import (
     load_profile, save_profile, load_strava_token, save_strava_token,
@@ -57,57 +57,11 @@ def auth_credentials():
 
 @app.route("/auth/host")
 def auth_host():
-    """Sign in using Garmin Render Secret Files, or env vars as fallback."""
-    if using_garth_secret_files():
-        return _finish_garmin_secret_login()
+    """Sign in using GARMIN_EMAIL/GARMIN_PASSWORD from Render environment."""
     email, password = get_host_garmin_credentials()
     if not email or not password:
         return redirect(url_for("login"))
     return _finish_garmin_login(email, password)
-
-
-def _finish_garmin_secret_login():
-    """Verify Garmin secret-file session and start the personal app session."""
-    from running_coach.parsers.garmin_connect import GarminConnectParser
-
-    username = os.environ.get("RUNNING_COACH_USER_ID", "garmin-secret-user")
-    name = os.environ.get("RUNNING_COACH_USER_NAME", "Runner")
-
-    try:
-        GarminConnectParser().fetch_runs(max_runs=1)
-    except Exception as e:
-        import traceback
-        print("GARMIN SECRET SESSION ERROR:", traceback.format_exc(), flush=True)
-        return render_template("login.html",
-            host_credentials=host_credentials_set(),
-            error=f"Could not connect to Garmin using Render Secret Files: {e}")
-
-    token = {"provider": "garmin_session"}
-
-    try:
-        save_strava_token(username, token, display_name=name, athlete_data={})
-    except Exception as e:
-        import traceback
-        print("SUPABASE SAVE ERROR:", traceback.format_exc(), flush=True)
-        return render_template("login.html",
-            host_credentials=host_credentials_set(),
-            error=f"Database error: {e} — Have you run setup_db.sql in Supabase?")
-
-    if not load_profile(username):
-        from running_coach.schemas.enums import FitnessLevel
-        import dataclasses
-        p = RunnerProfile(name=name, fitness_level=FitnessLevel.INTERMEDIATE, runs_per_week=3)
-        d = dataclasses.asdict(p)
-        d["fitness_level"] = p.fitness_level.value
-        save_profile(username, d)
-
-    session.permanent = True
-    session["user_id"] = username
-    session["user_name"] = name
-    session["user_avatar"] = ""
-
-    invalidate_runs_cache(username)
-    return redirect(url_for("dashboard"))
 
 
 def _finish_garmin_login(email: str, password: str):
@@ -235,52 +189,65 @@ def _deserialize_runs(data: list):
             pass
     return runs
 
+def _get_garmin_parser(uid):
+    token = load_strava_token(uid)
+    if not token:
+        raise RuntimeError("Missing Garmin connection for this user.")
+    email = token.get("email")
+    password = token.get("password")
+    if not email or not password:
+        raise RuntimeError("Missing Garmin credentials in saved user token.")
+    from running_coach.parsers.garmin_connect import GarminConnectParser
+    return GarminConnectParser(email, password)
+
 def _load_runs(uid):
     # Try cache first — avoids calling Garmin Connect on every page.
     cached = load_cached_runs(uid)
     if cached is not None:
         return _deserialize_runs(cached)
 
-    token = load_strava_token(uid)
-    if not token:
-        return []
-
-    provider = token.get("provider", "strava")
-
     try:
-        if provider in ("garmin", "garmin_session"):
-            from running_coach.parsers.garmin_connect import GarminConnectParser
-            if provider == "garmin_session":
-                runs = GarminConnectParser().fetch_runs(max_runs=200)
-            else:
-                email = token.get("email")
-                password = token.get("password")
-                if not email or not password:
-                    raise RuntimeError("Missing Garmin credentials in saved user token.")
-                runs = GarminConnectParser(email, password).fetch_runs(max_runs=200)
-            print(f"[GARMIN] fetched {len(runs)} runs", flush=True)
-        else:
-            # Backwards-compatible fallback for old Strava users.
-            if token.get("expires_at", 0) < time.time() + 300:
-                from web.auth import refresh_token
-                token = refresh_token(token)
-                save_strava_token(uid, token)
-            tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w")
-            json.dump(token, tmp); tmp.close()
-            try:
-                from running_coach.parsers.strava import StravaParser
-                runs = StravaParser(tmp.name).fetch_runs()
-                print(f"[STRAVA] fetched {len(runs)} runs", flush=True)
-            finally:
-                os.unlink(tmp.name)
-
+        runs = _get_garmin_parser(uid).fetch_runs(max_runs=200)
+        print(f"[GARMIN] fetched {len(runs)} runs", flush=True)
         save_cached_runs(uid, _serialize_runs(runs))
         return runs
     except Exception as e:
         import traceback
-        print("[ACTIVITY SYNC] fetch failed:", repr(e), flush=True)
+        print("[GARMIN SYNC] fetch failed:", repr(e), flush=True)
         print(traceback.format_exc(), flush=True)
         return []
+
+def _load_watch_health(uid, date_obj=None):
+    try:
+        return _get_garmin_parser(uid).fetch_daily_health(date_obj)
+    except Exception as e:
+        print("[GARMIN HEALTH] unavailable:", repr(e), flush=True)
+        return {}
+
+def _merge_watch_feedback(uid, feedback):
+    """Overlay watch sleep/HRV data on today's feedback without overwriting manual mood/RPE/pain."""
+    from running_coach.schemas.feedback import ManualFeedback
+    today = datetime.now().date()
+    key = today.isoformat()
+    watch = _load_watch_health(uid, today)
+    if not watch:
+        return feedback, {}
+    existing = feedback.get(key)
+    fb = existing or ManualFeedback(date=datetime.combine(today, datetime.min.time()))
+    changed = False
+    for attr in ("sleep_hours", "sleep_quality", "hrv_ms"):
+        val = watch.get(attr)
+        if val is not None and getattr(fb, attr, None) is None:
+            setattr(fb, attr, val)
+            changed = True
+    feedback[key] = fb
+    # Keep it cached in your normal feedback table so the recommendation uses it consistently today.
+    if changed:
+        try:
+            save_feedback_entry(uid, key, fb)
+        except Exception as e:
+            print("[GARMIN HEALTH] could not cache feedback:", repr(e), flush=True)
+    return feedback, watch
 
 def _get_coach(uid, profile):
     return RunningCoach(profile, model_dir=_get_model_dir(uid))
@@ -330,6 +297,7 @@ def dashboard():
 
     runs     = _load_runs(uid)
     feedback = load_feedback(uid)
+    feedback, watch_health = _merge_watch_feedback(uid, feedback)
     coach    = _get_coach(uid, profile)
 
     # No runs yet — still show a profile-based recommendation using rules engine
@@ -367,6 +335,8 @@ def dashboard():
         summary=summary if not is_new_user else None,
         fitness_result=fitness_result,
         is_new_user=is_new_user,
+        watch_health=watch_health,
+        latest_run=sorted(runs, key=lambda r: r.date, reverse=True)[0] if runs else None,
         no_runs=False, error=None,
         user_name=current_user_name(), user_avatar=current_user_avatar())
 
@@ -442,8 +412,9 @@ def log_feedback():
         return redirect(url_for("dashboard"))
 
     feedback = load_feedback(uid)
+    feedback, watch_health = _merge_watch_feedback(uid, feedback)
     recent   = sorted(feedback.values(), key=lambda x: x.date, reverse=True)[:7]
-    return render_template("log.html", profile=profile,
+    return render_template("log.html", profile=profile, watch_health=watch_health,
         recent_feedback=recent, today=datetime.now().date().isoformat(),
         user_name=current_user_name(), user_avatar=current_user_avatar())
 
@@ -511,6 +482,7 @@ def refresh_summary():
     invalidate_runs_cache(uid)  # force fresh Garmin fetch now
     runs     = _load_runs(uid)
     feedback = load_feedback(uid)
+    feedback, watch_health = _merge_watch_feedback(uid, feedback)
     coach    = _get_coach(uid, profile)
     analysis = coach.analyze(runs, feedback)
 

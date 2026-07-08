@@ -214,3 +214,8 @@ Each user has separate profile, Strava token, feedback, and ML models. Nothing i
 **ML badge not showing** — Run `python run.py train` to retrain. Need 10+ runs.
 
 **Deployed app loses data on restart** — Make sure `user_data/` is on Render's persistent disk (configured in `render.yaml`).
+
+
+## Watch health data
+
+The app now tries to read sleep, HRV, resting heart rate, body battery and stress from Garmin Connect when the library exposes those endpoints. Missing values are handled safely and manual notes still work. Sleep/HRV are merged into today's feedback automatically so the recommendation can use them without asking every morning.

@@ -6,6 +6,15 @@
 <div class="warning">{{ error }}</div>
 {% endif %}
 
+<div class="hero-card">
+  <div>
+    <div class="eyebrow">Today</div>
+    <h1>Your running coach</h1>
+    <p>Fresh recommendation based on your Garmin runs{% if watch_health and (watch_health.sleep_hours or watch_health.hrv_ms) %}, sleep and recovery data{% endif %}.</p>
+  </div>
+  <a href="/refresh" class="btn btn-primary">Sync watch</a>
+</div>
+
 {% if not profile.max_hr or not profile.resting_hr %}
 <div style="background:var(--c-amber-bg);border-left:3px solid #ef9f27;border-radius:0 var(--radius) var(--radius) 0;padding:0.85rem 1rem;margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;gap:10px;">
   <span style="font-size:13px;color:var(--c-amber);">
@@ -19,11 +28,11 @@
 <div style="background:var(--c-teal-bg);border-left:3px solid var(--c-teal);border-radius:0 var(--radius) var(--radius) 0;padding:1rem 1.1rem;margin-bottom:1rem;">
   <div style="font-size:16px;font-weight:600;color:var(--c-teal);margin-bottom:4px;">Welcome! No Garmin runs found yet.</div>
   <div style="font-size:13px;color:var(--c-muted);margin-bottom:0.75rem;">
-    The recommendation below is based on your profile settings. It will personalise as soon as you sync runs from Garmin.
+    The recommendation below is based on your profile settings. It will personalise as soon as you sync activities from your watch.
   </div>
   <div style="font-size:13px;color:var(--c-muted);">
     <strong style="color:var(--c-text);">To get started:</strong>
-    log runs on your Garmin device and press refresh,
+    record activities on your watch and press Sync,
     then do your first run and come back.
   </div>
 </div>
@@ -103,6 +112,38 @@
   {% endif %}
 
   <a href="/refresh" class="btn btn-secondary btn-sm" style="display:inline-block;margin-top:10px;font-size:13px;">↻ Recalculate after a new run</a>
+</div>
+{% endif %}
+
+{% if watch_health %}
+<div class="watch-grid">
+  <div class="mini-card">
+    <div class="metric-label">Sleep</div>
+    <div class="metric-value">{% if watch_health.sleep_hours %}{{ watch_health.sleep_hours }}h{% else %}—{% endif %}</div>
+    <div class="metric-sub">from watch</div>
+  </div>
+  <div class="mini-card">
+    <div class="metric-label">HRV</div>
+    <div class="metric-value">{% if watch_health.hrv_ms %}{{ watch_health.hrv_ms|round|int }} ms{% else %}—{% endif %}</div>
+    <div class="metric-sub">overnight</div>
+  </div>
+  <div class="mini-card">
+    <div class="metric-label">Resting HR</div>
+    <div class="metric-value">{% if watch_health.resting_hr %}{{ watch_health.resting_hr|round|int }}{% else %}—{% endif %}</div>
+    <div class="metric-sub">bpm</div>
+  </div>
+</div>
+{% endif %}
+
+{% if latest_run %}
+<div class="card latest-card">
+  <div class="card-title">Latest synced activity</div>
+  <div class="latest-main">
+    <strong>{{ latest_run.distance_km|round(1) }} km</strong>
+    <span>{{ latest_run.date.strftime('%d %b') }}</span>
+    <span>{{ (latest_run.duration_minutes|round)|int }} min</span>
+    {% if latest_run.avg_pace_min_per_km %}<span>{{ latest_run.avg_pace_min_per_km|int }}:{{ "%02d"|format(((latest_run.avg_pace_min_per_km % 1)*60)|int) }}/km</span>{% endif %}
+  </div>
 </div>
 {% endif %}
 
@@ -309,7 +350,7 @@
 {% endif %}{# end not no_runs #}
 
 <div style="margin-top:1.5rem;">
-  <a href="/log" class="btn btn-primary">Log today's feedback</a>
+  <a href="/log" class="btn btn-primary">Add manual note</a>
   <a href="/setup" class="btn btn-secondary" style="margin-left:8px;">Edit profile</a>
 </div>
 
