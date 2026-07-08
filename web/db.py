@@ -284,6 +284,8 @@ def load_cached_summary(username: str) -> Optional[dict]:
 def save_cached_summary(username: str, summary: dict) -> None:
     """Save today's dashboard summary, preserving any watch_health already cached for today."""
     today = datetime.now().date().isoformat()
+    if isinstance(summary, dict):
+        summary["summary_cached_at"] = datetime.now().isoformat()
 
     existing = None
     if not USE_DB:
@@ -431,6 +433,16 @@ def _load_daily_cache_row(username: str, date_str: str) -> Optional[dict]:
     except Exception as e:
         print(f"[cache] load daily_cache row error: {e}", flush=True)
     return None
+
+def load_daily_cache_raw(username: str, date_str: str = None) -> Optional[dict]:
+    """Return the raw daily_cache.summary row, including watch-only rows.
+
+    Used by /refresh to enforce a cooldown and avoid repeatedly hitting Garmin.
+    """
+    if date_str is None:
+        date_str = datetime.now().date().isoformat()
+    return _load_daily_cache_row(username, date_str)
+
 
 def _save_daily_cache_row(username: str, date_str: str, summary: dict) -> None:
     if not USE_DB:

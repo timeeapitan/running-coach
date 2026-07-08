@@ -22,9 +22,18 @@
   <div class="card">
     <div class="card-title">Connect Garmin Connect</div>
     <p style="font-size:13px;color:var(--c-muted);margin-bottom:1.25rem;line-height:1.6;">
-      This personal version syncs your runs directly from Garmin Connect using the unofficial
-      <strong>garminconnect</strong> Python library. No Garmin API subscription is needed.
+      This personal version syncs your watch data using your saved Garmin session files.
+      It does not store your Garmin password in the app.
     </p>
+
+    {% if secret_session %}
+    <a href="/auth/session" class="btn btn-primary" style="width:100%;text-align:center;margin-bottom:1rem;">
+      Sign in with Garmin session →
+    </a>
+    <p style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:1rem;">
+      Recommended for Render: uses /etc/secrets/oauth1_token.json and /etc/secrets/oauth2_token.json.
+    </p>
+    {% endif %}
 
     <form method="POST" action="/auth/credentials">
       <div class="form-group">
@@ -37,8 +46,7 @@
         <input type="password" name="password" placeholder="Garmin Connect password"
                autocomplete="current-password" autocorrect="off" spellcheck="false">
         <p style="font-size:11px;color:var(--c-muted);margin-top:4px;line-height:1.5;">
-          For a personal app, the credentials are saved so the server can refresh your activities.
-          You can alternatively set GARMIN_EMAIL and GARMIN_PASSWORD in Render environment variables.
+          Local fallback only. On Render, use the Garmin session button above to avoid repeated login/rate limits.
         </p>
       </div>
       <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">
@@ -48,8 +56,8 @@
 
     {% if host_credentials %}
     <div style="margin-top:1rem;padding-top:1rem;border-top:0.5px solid var(--c-border);text-align:center;">
-      <p style="font-size:12px;color:var(--c-muted);margin-bottom:8px;">Environment credentials found on Render.</p>
-      <a href="/auth/host" class="btn btn-secondary btn-sm">Sign in with Render Garmin credentials</a>
+      <p style="font-size:12px;color:var(--c-muted);margin-bottom:8px;">Environment credentials found, but Secret Files are safer.</p>
+      <a href="/auth/host" class="btn btn-secondary btn-sm">Use fallback credentials</a>
     </div>
     {% endif %}
   </div>

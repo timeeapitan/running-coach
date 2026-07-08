@@ -12,12 +12,12 @@ sys.path.insert(0, ROOT)
 
 from web.auth import (
     login_required, current_user_id, current_user_name, current_user_avatar,
-    host_credentials_set, get_host_garmin_credentials,
+    host_credentials_set, get_host_garmin_credentials, secret_session_set,
 )
 from web.db import (
     load_profile, save_profile, load_strava_token, save_strava_token,
     load_feedback, save_feedback_entry, list_users, load_athlete_info, USE_DB,
-    load_cached_summary, save_cached_summary,
+    load_cached_summary, save_cached_summary, load_daily_cache_raw,
     load_cached_runs, save_cached_runs, invalidate_runs_cache,
     load_cached_watch_health, save_cached_watch_health, invalidate_watch_health_cache,
 )
@@ -41,7 +41,9 @@ _MODEL_CACHE = {}
 def login():
     if session.get("user_id"):
         return redirect(url_for("dashboard"))
-    return render_template("login.html", host_credentials=host_credentials_set())
+    return render_template("login.html",
+        host_credentials=host_credentials_set(),
+        secret_session=secret_session_set())
 
 
 @app.route("/auth/credentials", methods=["POST"])
@@ -52,9 +54,53 @@ def auth_credentials():
     if not email or not password:
         return render_template("login.html",
             host_credentials=host_credentials_set(),
+            secret_session=secret_session_set(),
             error="Please enter both Garmin email and password.")
     return _finish_garmin_login(email, password)
 
+
+
+@app.route("/auth/session")
+def auth_session():
+    """Sign in using Garmin session files mounted as Render Secret Files.
+
+    This does not call Garmin's login endpoint, so it avoids the 429 rate-limit
+    issue caused by repeated username/password authentication from Render.
+    """
+    if not secret_session_set():
+        return render_template("login.html",
+            host_credentials=host_credentials_set(),
+            secret_session=False,
+            error="Garmin session files are missing. Upload oauth1_token.json and oauth2_token.json as Render Secret Files.")
+
+    # Use one stable local app user. No Garmin password is stored in Supabase.
+    username = os.environ.get("APP_USER_ID", "timeea").strip().lower()
+    name = os.environ.get("APP_USER_NAME", "Timeea Pitan").strip() or username
+    token = {"provider": "garmin", "auth_mode": "secret_files", "session_dir": os.environ.get("GARTH_SESSION_DIR", "/etc/secrets")}
+
+    try:
+        save_strava_token(username, token, display_name=name, athlete_data={})
+    except Exception as e:
+        import traceback
+        print("SUPABASE SAVE ERROR:", traceback.format_exc(), flush=True)
+        return render_template("login.html",
+            host_credentials=host_credentials_set(),
+            secret_session=secret_session_set(),
+            error=f"Database error: {e} — Have you run setup_db.sql in Supabase?")
+
+    if not load_profile(username):
+        from running_coach.schemas.enums import FitnessLevel
+        import dataclasses
+        p = RunnerProfile(name=name, fitness_level=FitnessLevel.INTERMEDIATE, runs_per_week=3)
+        d = dataclasses.asdict(p)
+        d["fitness_level"] = p.fitness_level.value
+        save_profile(username, d)
+
+    session.permanent = True
+    session["user_id"] = username
+    session["user_name"] = name
+    session["user_avatar"] = ""
+    return redirect(url_for("dashboard"))
 
 @app.route("/auth/host")
 def auth_host():
@@ -80,6 +126,7 @@ def _finish_garmin_login(email: str, password: str):
         print("GARMIN LOGIN ERROR:", traceback.format_exc(), flush=True)
         return render_template("login.html",
             host_credentials=host_credentials_set(),
+            secret_session=secret_session_set(),
             error=f"Could not connect to Garmin: {e}")
 
     token = {
@@ -95,6 +142,7 @@ def _finish_garmin_login(email: str, password: str):
         print("SUPABASE SAVE ERROR:", traceback.format_exc(), flush=True)
         return render_template("login.html",
             host_credentials=host_credentials_set(),
+            secret_session=secret_session_set(),
             error=f"Database error: {e} — Have you run setup_db.sql in Supabase?")
 
     if not load_profile(username):
@@ -191,15 +239,21 @@ def _deserialize_runs(data: list):
     return runs
 
 def _get_garmin_parser(uid):
-    token = load_strava_token(uid)
-    if not token:
-        raise RuntimeError("Missing Garmin connection for this user.")
+    token = load_strava_token(uid) or {}
+    from running_coach.parsers.garmin_connect import GarminConnectParser
+
+    # Preferred Render mode: resume saved Garmin session from Secret Files.
+    # This must be checked first so normal page loads never call Garmin login.
+    if GarminConnectParser.secret_session_available():
+        return GarminConnectParser.from_secret_session()
+
+    # Local/manual fallback only. This can hit Garmin login limits, so avoid it on Render.
     email = token.get("email")
     password = token.get("password")
-    if not email or not password:
-        raise RuntimeError("Missing Garmin credentials in saved user token.")
-    from running_coach.parsers.garmin_connect import GarminConnectParser
-    return GarminConnectParser(email, password)
+    if email and password:
+        return GarminConnectParser(email, password)
+
+    raise RuntimeError("Missing Garmin session. Upload oauth1_token.json and oauth2_token.json as Render Secret Files.")
 
 def _load_runs(uid, force=False, auto_fetch=False):
     """Load runs with a once-per-day auto sync.
@@ -546,6 +600,19 @@ def refresh_summary():
     profile  = _get_profile(uid)
     if not profile:
         return redirect(url_for("dashboard"))
+
+    # Avoid repeatedly hitting Garmin if the user presses Sync several times.
+    # This is especially important on Render because Garmin can rate-limit the shared IP.
+    raw_cache = load_daily_cache_raw(uid) or {}
+    last_sync_text = raw_cache.get("watch_cached_at") or raw_cache.get("summary_cached_at")
+    if last_sync_text and request.args.get("force") != "1":
+        try:
+            last_sync = datetime.fromisoformat(str(last_sync_text).replace("Z", "+00:00")).replace(tzinfo=None)
+            if datetime.now() - last_sync < timedelta(minutes=30):
+                print("[GARMIN SYNC] skipped: refreshed less than 30 minutes ago", flush=True)
+                return redirect(url_for("dashboard"))
+        except Exception:
+            pass
 
     invalidate_runs_cache(uid)  # force fresh Garmin fetch now
     invalidate_watch_health_cache(uid)  # force fresh watch health fetch now

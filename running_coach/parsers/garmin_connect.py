@@ -1,14 +1,19 @@
 """
-Garmin Connect online parser.
+Garmin Connect online parser for the personal Running Coach app.
 
-This uses the unofficial `garminconnect` Python package to log in to your
-Garmin Connect account and fetch recent activities. It is intended for personal
-use, not for a public multi-user app.
+Production mode uses a saved `garth` session from Render Secret Files:
+  /etc/secrets/oauth1_token.json
+  /etc/secrets/oauth2_token.json
+
+This avoids calling Garmin's login endpoint on every sync, which is what causes
+429 / IP rate-limit errors. Email/password login is kept only as a local/manual
+fallback, not as the normal deployed path.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+import os
+from datetime import datetime, date as date_cls
 from typing import Any, Dict, List, Optional
 
 from ..schemas import ActivityType, NormalizedRun
@@ -27,57 +32,50 @@ RUN_TYPES = {
 
 
 class GarminConnectParser:
-    """Fetches activities from Garmin Connect and converts runs to NormalizedRun."""
+    """Fetches Garmin activities/health data and converts runs to NormalizedRun."""
 
-    def __init__(self, email: str, password: str):
+    def __init__(self, email: str | None = None, password: str | None = None,
+                 session_dir: str | None = None):
         self.email = email
         self.password = password
+        self.session_dir = session_dir or os.environ.get("GARTH_SESSION_DIR", "/etc/secrets")
+        self._garth_ready = False
+        self._gc_client = None
+
+    @classmethod
+    def from_secret_session(cls, session_dir: str | None = None) -> "GarminConnectParser":
+        return cls(session_dir=session_dir or os.environ.get("GARTH_SESSION_DIR", "/etc/secrets"))
+
+    @staticmethod
+    def secret_session_available(session_dir: str | None = None) -> bool:
+        session_dir = session_dir or os.environ.get("GARTH_SESSION_DIR", "/etc/secrets")
+        return (
+            os.path.exists(os.path.join(session_dir, "oauth1_token.json"))
+            and os.path.exists(os.path.join(session_dir, "oauth2_token.json"))
+        )
+
+    # ── Public API ────────────────────────────────────────────────────────────
 
     def fetch_runs(self, max_runs: int = 200) -> List[NormalizedRun]:
-        try:
-            from garminconnect import Garmin
-        except ImportError as exc:
-            raise RuntimeError(
-                "Missing dependency: garminconnect. Add it to requirements.txt and redeploy."
-            ) from exc
-
-        client = Garmin(self.email, self.password)
-        try:
-            client.login()
-        except Exception as exc:
-            raise RuntimeError(
-                "Garmin login failed. Check GARMIN_EMAIL/GARMIN_PASSWORD or the credentials entered in the app. "
-                "If Garmin asks for MFA/2FA, log in once in the browser and try again, or use app credentials without MFA."
-            ) from exc
-
-        try:
-            activities = client.get_activities(0, max_runs)
-        except Exception as exc:
-            raise RuntimeError(f"Could not fetch Garmin activities: {exc}") from exc
-
+        activities = self._fetch_activities(max_runs)
         runs: List[NormalizedRun] = []
         for item in activities or []:
             run = self._parse_activity(item)
             if run:
                 runs.append(run)
-
         runs.sort(key=lambda r: r.date)
         return runs
-
-
 
     def fetch_daily_health(self, date=None) -> dict:
         """Fetch sleep/HRV/body-battery style metrics for one day.
 
-        The unofficial Garmin package has changed method names across versions, so
-        this method is intentionally defensive. Missing metrics simply return None.
+        Missing endpoints/metrics are handled safely. This method never performs
+        a fresh Garmin login when secret session files are available.
         """
-        from datetime import date as date_cls
         if date is None:
             date = date_cls.today()
-        date_str = date.isoformat() if hasattr(date, 'isoformat') else str(date)
+        date_str = date.isoformat() if hasattr(date, "isoformat") else str(date)
 
-        client = self._login_client()
         health = {
             "date": date_str,
             "sleep_hours": None,
@@ -86,67 +84,174 @@ class GarminConnectParser:
             "resting_hr": None,
             "body_battery": None,
             "stress": None,
-            "source": "watch",
+            "source": "garmin_watch",
         }
 
-        # Sleep
-        sleep = self._call_first(client, ["get_sleep_data", "get_sleep"], date_str)
-        if isinstance(sleep, dict):
-            secs = self._first_number(sleep, [
-                "sleepTimeSeconds", "totalSleepSeconds", "sleepDurationSeconds",
-                "durationInSeconds", "totalSleepDuration"
+        # Prefer garth session mode.
+        if self.secret_session_available(self.session_dir):
+            self._resume_garth()
+            sleep = self._garth_get_first([
+                f"/wellness-service/wellness/dailySleepData/{date_str}",
+                f"/sleep-service/sleep/dailySleepData/{date_str}",
             ])
-            mins = self._first_number(sleep, ["sleepTimeMinutes", "totalSleepMinutes", "durationInMinutes"])
-            hours = self._first_number(sleep, ["sleepHours", "totalSleepHours"])
-            if secs:
-                health["sleep_hours"] = round(secs / 3600, 2)
-            elif mins:
-                health["sleep_hours"] = round(mins / 60, 2)
-            elif hours:
-                health["sleep_hours"] = round(hours, 2)
+            self._apply_sleep(health, sleep)
 
-            score = self._first_number(sleep, ["sleepScore", "overallSleepScore", "sleepScores"])
-            if isinstance(sleep.get("sleepScores"), dict):
-                score = self._first_number(sleep["sleepScores"], ["overall", "total", "sleepScore"])
-            if score is not None:
-                # Convert Garmin 0-100 score to the existing 1-5 app scale.
-                health["sleep_quality"] = max(1, min(5, round(score / 20)))
+            hrv = self._garth_get_first([
+                f"/hrv-service/hrv/{date_str}",
+                f"/wellness-service/wellness/hrv/{date_str}",
+            ])
+            self._apply_hrv(health, hrv)
 
-        # HRV
+            rhr = self._garth_get_first([
+                f"/wellness-service/wellness/dailyHeartRate/{date_str}",
+                f"/wellness-service/wellness/rhr/{date_str}",
+            ])
+            self._apply_resting_hr(health, rhr)
+
+            bb = self._garth_get_first([
+                f"/wellness-service/wellness/bodyBattery/reports/daily/{date_str}",
+                f"/wellness-service/wellness/bodyBattery/{date_str}",
+            ])
+            health["body_battery"] = self._extract_latest_numeric(
+                bb, ["bodyBatteryValue", "bodyBattery", "value", "charged", "drained"]
+            )
+
+            stress = self._garth_get_first([
+                f"/wellness-service/wellness/dailyStress/{date_str}",
+                f"/wellness-service/wellness/stress/{date_str}",
+            ])
+            self._apply_stress(health, stress)
+            return health
+
+        # Local/manual fallback using garminconnect credentials.
+        client = self._login_garminconnect_client()
+        sleep = self._call_first(client, ["get_sleep_data", "get_sleep"], date_str)
+        self._apply_sleep(health, sleep)
         hrv = self._call_first(client, ["get_hrv_data", "get_hrv", "get_hrv_status"], date_str)
+        self._apply_hrv(health, hrv)
+        rhr = self._call_first(client, ["get_rhr_day", "get_resting_heart_rate"], date_str)
+        self._apply_resting_hr(health, rhr)
+        bb = self._call_first(client, ["get_body_battery", "get_body_battery_events"], date_str)
+        health["body_battery"] = self._extract_latest_numeric(bb, ["bodyBatteryValue", "value", "bodyBattery"])
+        stress = self._call_first(client, ["get_stress_data", "get_stress"], date_str)
+        self._apply_stress(health, stress)
+        return health
+
+    # ── Garmin access ─────────────────────────────────────────────────────────
+
+    def _resume_garth(self) -> None:
+        if self._garth_ready:
+            return
+        try:
+            import garth
+        except ImportError as exc:
+            raise RuntimeError("Missing dependency: garth. Add garth to requirements.txt and redeploy.") from exc
+        try:
+            garth.resume(self.session_dir)
+            self._garth_ready = True
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not resume Garmin session from {self.session_dir}. "
+                "Regenerate oauth1_token.json and oauth2_token.json and upload them as Render Secret Files."
+            ) from exc
+
+    def _garth_get_first(self, paths: list[str]) -> Any:
+        import garth
+        for path in paths:
+            try:
+                data = garth.connectapi(path)
+                if data is not None:
+                    return data
+            except Exception:
+                continue
+        return None
+
+    def _fetch_activities(self, max_runs: int) -> list:
+        if self.secret_session_available(self.session_dir):
+            self._resume_garth()
+            import garth
+            # Garmin activity list endpoint used by Garmin Connect web.
+            path = "/activitylist-service/activities/search/activities"
+            try:
+                return garth.connectapi(path, params={"start": 0, "limit": max_runs}) or []
+            except TypeError:
+                return garth.connectapi(f"{path}?start=0&limit={max_runs}") or []
+
+        client = self._login_garminconnect_client()
+        try:
+            return client.get_activities(0, max_runs) or []
+        except Exception as exc:
+            raise RuntimeError(f"Could not fetch Garmin activities: {exc}") from exc
+
+    def _login_garminconnect_client(self):
+        if self._gc_client is not None:
+            return self._gc_client
+        if not self.email or not self.password:
+            raise RuntimeError(
+                "Missing Garmin session. Upload oauth1_token.json and oauth2_token.json as Render Secret Files."
+            )
+        try:
+            from garminconnect import Garmin
+        except ImportError as exc:
+            raise RuntimeError("Missing dependency: garminconnect. Add it to requirements.txt and redeploy.") from exc
+        client = Garmin(self.email, self.password)
+        try:
+            client.login()
+        except Exception as exc:
+            raise RuntimeError(
+                "Garmin login failed. In production, use Render Secret Files instead of email/password login."
+            ) from exc
+        self._gc_client = client
+        return client
+
+    # ── Health extraction helpers ─────────────────────────────────────────────
+
+    def _apply_sleep(self, health: dict, sleep: Any) -> None:
+        if not isinstance(sleep, dict):
+            return
+        secs = self._first_number(sleep, [
+            "sleepTimeSeconds", "totalSleepSeconds", "sleepDurationSeconds",
+            "durationInSeconds", "totalSleepDuration"
+        ])
+        mins = self._first_number(sleep, ["sleepTimeMinutes", "totalSleepMinutes", "durationInMinutes"])
+        hours = self._first_number(sleep, ["sleepHours", "totalSleepHours"])
+        if secs:
+            health["sleep_hours"] = round(secs / 3600, 2)
+        elif mins:
+            health["sleep_hours"] = round(mins / 60, 2)
+        elif hours:
+            health["sleep_hours"] = round(hours, 2)
+
+        score = self._first_number(sleep, ["sleepScore", "overallSleepScore", "score"])
+        if isinstance(sleep.get("sleepScores"), dict):
+            score = self._first_number(sleep["sleepScores"], ["overall", "total", "sleepScore", "value"])
+        if score is not None:
+            health["sleep_quality"] = max(1, min(5, round(score / 20)))
+
+    def _apply_hrv(self, health: dict, hrv: Any) -> None:
         if isinstance(hrv, dict):
             val = self._first_number(hrv, ["lastNightAvg", "weeklyAvg", "avgHrv", "average", "hrvValue", "value"])
             if val is None and isinstance(hrv.get("hrvSummary"), dict):
                 val = self._first_number(hrv["hrvSummary"], ["lastNightAvg", "weeklyAvg", "average"])
             health["hrv_ms"] = val
 
-        # Resting HR
-        rhr = self._call_first(client, ["get_rhr_day", "get_resting_heart_rate"], date_str)
+    def _apply_resting_hr(self, health: dict, rhr: Any) -> None:
         if isinstance(rhr, dict):
-            health["resting_hr"] = self._first_number(rhr, ["restingHeartRate", "value", "restingHR"])
+            health["resting_hr"] = self._first_number(rhr, [
+                "restingHeartRate", "value", "restingHR", "restingHeartRateThisTimestamp"
+            ])
+            if health["resting_hr"] is None:
+                health["resting_hr"] = self._extract_latest_numeric(rhr, ["restingHeartRate", "value"])
         elif isinstance(rhr, (int, float)):
             health["resting_hr"] = float(rhr)
 
-        # Body Battery / stress if available
-        bb = self._call_first(client, ["get_body_battery", "get_body_battery_events"], date_str)
-        health["body_battery"] = self._extract_latest_numeric(bb, ["bodyBatteryValue", "value", "bodyBattery"])
-
-        stress = self._call_first(client, ["get_stress_data", "get_stress"], date_str)
+    def _apply_stress(self, health: dict, stress: Any) -> None:
         if isinstance(stress, dict):
-            health["stress"] = self._first_number(stress, ["avgStressLevel", "averageStressLevel", "stressLevel", "value"])
-
-        return health
-
-    def _login_client(self):
-        try:
-            from garminconnect import Garmin
-        except ImportError as exc:
-            raise RuntimeError(
-                "Missing dependency: garminconnect. Add it to requirements.txt and redeploy."
-            ) from exc
-        client = Garmin(self.email, self.password)
-        client.login()
-        return client
+            health["stress"] = self._first_number(stress, [
+                "avgStressLevel", "averageStressLevel", "stressLevel", "value", "maxStressLevel"
+            ])
+            if health["stress"] is None:
+                health["stress"] = self._extract_latest_numeric(stress, ["stressLevel", "value"])
 
     def _call_first(self, client, names, *args):
         for name in names:
@@ -191,6 +296,8 @@ class GarminConnectParser:
                 if found is not None:
                     return found
         return None
+
+    # ── Activity parsing ──────────────────────────────────────────────────────
 
     def _parse_activity(self, data: Dict[str, Any]) -> Optional[NormalizedRun]:
         type_key = self._activity_type_key(data)
@@ -250,7 +357,7 @@ class GarminConnectParser:
                 continue
         raise ValueError(f"Cannot parse Garmin date: {value!r}")
 
-    def _number(self, value: Any, default: float) -> float:
+    def _number(self, value: Any, default: float = 0.0) -> float:
         try:
             return float(value)
         except (TypeError, ValueError):
@@ -258,12 +365,12 @@ class GarminConnectParser:
 
     def _optional_number(self, value: Any) -> Optional[float]:
         try:
-            if value is None or value == "":
-                return None
-            return float(value)
+            return float(value) if value is not None else None
         except (TypeError, ValueError):
             return None
 
     def _optional_int(self, value: Any) -> Optional[int]:
-        num = self._optional_number(value)
-        return int(num) if num is not None else None
+        try:
+            return int(round(float(value))) if value is not None else None
+        except (TypeError, ValueError):
+            return None

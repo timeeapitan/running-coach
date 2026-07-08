@@ -15,9 +15,18 @@ from flask import session, redirect, url_for
 
 _HOST_GARMIN_EMAIL = os.environ.get("GARMIN_EMAIL", "")
 _HOST_GARMIN_PASSWORD = os.environ.get("GARMIN_PASSWORD", "")
+_GARTH_SESSION_DIR = os.environ.get("GARTH_SESSION_DIR", "/etc/secrets")
+
+
+def secret_session_set() -> bool:
+    return (
+        os.path.exists(os.path.join(_GARTH_SESSION_DIR, "oauth1_token.json"))
+        and os.path.exists(os.path.join(_GARTH_SESSION_DIR, "oauth2_token.json"))
+    )
 
 
 def host_credentials_set() -> bool:
+    # Kept for local fallback only. In Render, prefer secret_session_set().
     return bool(_HOST_GARMIN_EMAIL and _HOST_GARMIN_PASSWORD)
 
 
