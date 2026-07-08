@@ -89,6 +89,12 @@
     <span style="color:var(--c-teal);">{{ summary.streak_days }}-day streak 🔥</span>
     {% endif %}
 
+    {% if summary.should_run_today is sameas false %}
+    <span style="color:{{ sc[0] }};font-weight:600;">Next run: {% if summary.days_until_next_run == 1 %}tomorrow{% elif summary.days_until_next_run == 0 %}today{% else %}in {{ summary.days_until_next_run }} days{% endif %}</span>
+    {% else %}
+    <span style="color:var(--c-teal);font-weight:600;">Run allowed today</span>
+    {% endif %}
+
     {% if summary.week_goal_km %}
     <span style="color:var(--c-muted);">This week: <strong style="color:var(--c-text);">{{ summary.week_km }} / {{ summary.week_goal_km }} km</strong>
     {% if summary.week_pct is not none %} ({{ summary.week_pct }}%){% endif %}</span>
@@ -195,8 +201,9 @@
 {% endfor %}
 {% endif %}
 
-<!-- ── NEXT RUN (changes 2, 3, 9, 13) ── -->
+<!-- ── TODAY / NEXT RUN ── -->
 <div class="rec-box">
+  <div class="card-title">{% if summary and summary.should_run_today is sameas false %}Recovery gate{% else %}Today’s run{% endif %}</div>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
     <span style="font-size:20px;font-weight:700;color:var(--c-text);">{{ recommendation.description }}</span>
     {% if ml_active %}

@@ -201,11 +201,19 @@ def _get_garmin_parser(uid):
     from running_coach.parsers.garmin_connect import GarminConnectParser
     return GarminConnectParser(email, password)
 
-def _load_runs(uid):
-    # Try cache first — avoids calling Garmin Connect on every page.
+def _load_runs(uid, force=False, auto_fetch=False):
+    """Load runs with a once-per-day auto sync.
+
+    Normal tabs read cache only. The Dashboard can pass auto_fetch=True:
+    if today's runs cache is missing, the app fetches from Garmin once, saves
+    runs_cache, and later page loads use the cache for the rest of the day.
+    /refresh still forces a fresh Garmin fetch.
+    """
     cached = load_cached_runs(uid)
-    if cached is not None:
+    if cached is not None and not force:
         return _deserialize_runs(cached)
+    if cached is None and not force and not auto_fetch:
+        return []
 
     try:
         runs = _get_garmin_parser(uid).fetch_runs(max_runs=200)
@@ -216,21 +224,24 @@ def _load_runs(uid):
         import traceback
         print("[GARMIN SYNC] fetch failed:", repr(e), flush=True)
         print(traceback.format_exc(), flush=True)
-        return []
+        return _deserialize_runs(cached) if cached is not None else []
 
-def _load_watch_health(uid, date_obj=None, force=False):
-    """Load daily watch metrics from cache first; fetch from Garmin only when needed.
+def _load_watch_health(uid, date_obj=None, force=False, auto_fetch=False):
+    """Load daily watch metrics with a once-per-day auto sync.
 
-    This keeps pages like Notes fast. /refresh passes force=True and updates the cache.
+    If today's watch_cache is missing and auto_fetch=True, fetch Garmin once,
+    save watch_cache, and reuse it for the rest of the day. Notes and other
+    tabs keep reading cache only. /refresh still forces a fresh fetch.
     """
     if date_obj is None:
         date_obj = datetime.now().date()
     date_str = date_obj.isoformat() if hasattr(date_obj, "isoformat") else str(date_obj)
 
-    if not force:
-        cached = load_cached_watch_health(uid, date_str)
-        if cached is not None:
-            return cached
+    cached = load_cached_watch_health(uid, date_str)
+    if cached is not None and not force:
+        return cached
+    if cached is None and not force and not auto_fetch:
+        return {}
 
     try:
         watch = _get_garmin_parser(uid).fetch_daily_health(date_obj) or {}
@@ -242,12 +253,12 @@ def _load_watch_health(uid, date_obj=None, force=False):
         cached = load_cached_watch_health(uid, date_str)
         return cached or {}
 
-def _merge_watch_feedback(uid, feedback, force=False):
+def _merge_watch_feedback(uid, feedback, force=False, auto_fetch=False):
     """Overlay cached watch sleep/HRV data on today's feedback without overwriting manual mood/RPE/pain."""
     from running_coach.schemas.feedback import ManualFeedback
     today = datetime.now().date()
     key = today.isoformat()
-    watch = _load_watch_health(uid, today, force=force)
+    watch = _load_watch_health(uid, today, force=force, auto_fetch=auto_fetch)
     if not watch:
         return feedback, {}
     existing = feedback.get(key)
@@ -302,6 +313,37 @@ def _weekly_summary(runs, weeks=8):
         })
     return result
 
+def _rest_recommendation_from_summary(summary):
+    """Convert the daily recovery gate into the recommendation card."""
+    from running_coach.schemas.enums import WorkoutType, Intensity
+    from running_coach.schemas.workout import WorkoutRecommendation
+
+    days = int(summary.get("days_until_next_run") or 0)
+    if days <= 0:
+        next_text = "your next planned run"
+    elif days == 1:
+        next_text = "tomorrow"
+    else:
+        next_text = f"in {days} days"
+
+    reasons = summary.get("recovery_reasons") or []
+    reason = ", ".join(reasons[:2]) if reasons else "your recent training load"
+
+    return WorkoutRecommendation(
+        workout_type=WorkoutType.REST,
+        intensity=Intensity.VERY_EASY,
+        description="Rest / recovery day",
+        rationale=f"No run recommended today. Next run: {next_text}. Reason: {reason}.",
+        target_distance_km=None,
+        target_duration_minutes=None,
+        target_hr_zone=None,
+        steps=[
+            {"label": "Recovery", "detail": "Walk lightly, stretch, hydrate, and sleep well."},
+            {"label": "Next run", "detail": f"Come back {next_text} unless your watch recovery metrics are still low."},
+        ],
+    )
+
+
 
 # ── App pages (all protected) ─────────────────────────────────────────────────
 
@@ -313,9 +355,12 @@ def dashboard():
     if not profile:
         return redirect(url_for("setup"))
 
-    runs     = _load_runs(uid)
+    # Dashboard is the only normal page that may auto-sync.
+    # If today's cache is missing, this fetches Garmin once and saves cache.
+    # Later visits today read from runs_cache/watch_cache instantly.
+    runs     = _load_runs(uid, auto_fetch=True)
     feedback = load_feedback(uid)
-    feedback, watch_health = _merge_watch_feedback(uid, feedback)
+    feedback, watch_health = _merge_watch_feedback(uid, feedback, auto_fetch=True)
     coach    = _get_coach(uid, profile)
 
     # No runs yet — still show a profile-based recommendation using rules engine
@@ -344,6 +389,11 @@ def dashboard():
         # Not cached yet today — compute and store it
         summary = build_daily_summary(runs, profile, analysis, rec, feedback)
         save_cached_summary(uid, summary)
+
+    # Recovery gate: when the latest run was hard enough to require rest,
+    # the dashboard must not show a normal run suggestion.
+    if summary and summary.get("should_run_today") is False:
+        rec = _rest_recommendation_from_summary(summary)
 
     return render_template("dashboard.html",
         profile=profile, analysis=analysis, recommendation=rec,
@@ -499,7 +549,7 @@ def refresh_summary():
 
     invalidate_runs_cache(uid)  # force fresh Garmin fetch now
     invalidate_watch_health_cache(uid)  # force fresh watch health fetch now
-    runs     = _load_runs(uid)
+    runs     = _load_runs(uid, force=True)
     feedback = load_feedback(uid)
     feedback, watch_health = _merge_watch_feedback(uid, feedback, force=True)
     coach    = _get_coach(uid, profile)

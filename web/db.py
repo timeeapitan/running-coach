@@ -320,13 +320,11 @@ def _file_save_cache(username: str, today: str, summary: dict) -> None:
 
 # ── Runs cache ────────────────────────────────────────────────────────────────
 # Caches activity runs in Supabase so navigation does not hit the activity provider
-# on every page. TTL is 2 hours. Invalidated on /refresh.
-
-RUNS_CACHE_TTL_MINUTES = 120
+# on every page. The cache is daily: if it was not written today, Dashboard
+# will sync once from Garmin; after that all tabs use today's cached data.
 
 def load_cached_runs(username: str) -> Optional[list]:
-    """Return cached runs as list of dicts, or None if stale/missing."""
-    import time
+    """Return today's cached runs as list of dicts, or None if missing/old."""
     if not USE_DB:
         return _file_load_runs_cache(username)
     try:
@@ -335,13 +333,9 @@ def load_cached_runs(username: str) -> Optional[list]:
             return None
         cached_at = rows[0].get("cached_at", "")
         if cached_at:
-            # Strip timezone offset cleanly — Supabase returns e.g. "2026-05-11T18:06:00+00:00"
-            ts_str = cached_at.replace("Z", "").split("+")[0].split("-")[0]
-            # Safer: just parse the first 19 characters (YYYY-MM-DDTHH:MM:SS)
-            ts_str = cached_at[:19]
-            cached_dt = datetime.fromisoformat(ts_str)
-            age_minutes = (datetime.now() - cached_dt).total_seconds() / 60
-            if age_minutes > RUNS_CACHE_TTL_MINUTES:
+            cached_day = cached_at[:10]
+            today = datetime.now().date().isoformat()
+            if cached_day != today:
                 return None
         raw = rows[0]["runs"]
         if isinstance(raw, str):
@@ -378,19 +372,17 @@ def invalidate_runs_cache(username: str) -> None:
         pass
 
 def _file_load_runs_cache(username: str) -> Optional[list]:
-    import time
     p = os.path.join(_udir(username), "runs_cache.json")
     if not os.path.exists(p): return None
     with open(p) as f: data = json.load(f)
-    age_minutes = (time.time() - data.get("cached_at", 0)) / 60
-    if age_minutes > RUNS_CACHE_TTL_MINUTES: return None
+    today = datetime.now().date().isoformat()
+    if data.get("date") != today: return None
     return data.get("runs")
 
 def _file_save_runs_cache(username: str, runs_data: list) -> None:
-    import time
     p = os.path.join(_udir(username), "runs_cache.json")
     with open(p, "w") as f:
-        json.dump({"cached_at": time.time(), "runs": runs_data}, f)
+        json.dump({"date": datetime.now().date().isoformat(), "runs": runs_data}, f)
 
 
 # ── Watch health cache ───────────────────────────────────────────────────────

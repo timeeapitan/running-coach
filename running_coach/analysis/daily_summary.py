@@ -13,51 +13,96 @@ from ..schemas.feedback import ManualFeedback
 from .insights import injury_risk
 
 
-def _smart_recovery_days(last_run: NormalizedRun, profile: RunnerProfile) -> int:
+def _typical_run_km(runs: List[NormalizedRun]) -> float:
+    """Return a robust typical run distance from recent runs."""
+    recent = sorted(runs, key=lambda r: r.date, reverse=True)[:12]
+    distances = sorted([r.distance_km for r in recent if r.distance_km])
+    if not distances:
+        return 6.0
+    mid = len(distances) // 2
+    return distances[mid] if len(distances) % 2 else (distances[mid - 1] + distances[mid]) / 2
+
+
+def _recovery_context(
+    last_run: NormalizedRun,
+    profile: RunnerProfile,
+    runs: List[NormalizedRun],
+    feedback: Dict[str, ManualFeedback],
+    now: datetime,
+) -> Dict:
     """
-    Compute minimum rest days needed after a run.
+    Decide how many full recovery days are needed after the latest run.
 
-    Factors:
-      - HR intensity relative to max HR
-      - Distance relative to profile average
-      - Runs per week target (higher frequency = shorter rest windows)
-
-    Returns 0, 1, or 2 days minimum rest.
+    This is intentionally conservative: after a hard effort, the app should not
+    suggest another run too soon. Garmin health values, when available, can add
+    an extra recovery day.
     """
     if not last_run:
-        return 0
+        return {"min_rest_days": 0, "effort_score": 0, "reasons": []}
 
+    reasons = []
     max_hr = profile.max_hr or 185
 
-    # HR intensity score 0-1
     hr_intensity = 0.0
     if last_run.avg_hr:
         hr_intensity = min(1.0, last_run.avg_hr / max_hr)
+        if hr_intensity >= 0.88:
+            reasons.append("high heart-rate effort")
+        elif hr_intensity >= 0.78:
+            reasons.append("moderate-hard heart-rate effort")
 
-    # Distance score 0-1 (relative to a "typical" run of 6 km)
-    typical_km  = 6.0
-    dist_score  = min(1.0, last_run.distance_km / (typical_km * 2))
+    typical_km = max(3.0, _typical_run_km(runs))
+    dist_ratio = last_run.distance_km / typical_km if typical_km else 1.0
+    dist_score = min(1.0, dist_ratio / 2.0)
+    if dist_ratio >= 1.6:
+        reasons.append("longer than your usual run")
+    elif dist_ratio >= 1.25:
+        reasons.append("above your usual distance")
 
-    # Combined effort score
-    effort = (hr_intensity * 0.6) + (dist_score * 0.4)
+    # If HR is missing, distance and duration still carry the decision.
+    effort = (hr_intensity * 0.6) + (dist_score * 0.4) if hr_intensity else dist_score
 
-    # Adjust for runs per week — more frequent runner needs shorter gaps
     rpw = max(1, profile.runs_per_week)
     if rpw >= 5:
-        threshold_hard = 0.85
-        threshold_mod  = 0.70
+        threshold_hard, threshold_mod = 0.85, 0.70
     elif rpw >= 3:
-        threshold_hard = 0.80
-        threshold_mod  = 0.65
+        threshold_hard, threshold_mod = 0.80, 0.65
     else:
-        threshold_hard = 0.75
-        threshold_mod  = 0.60
+        threshold_hard, threshold_mod = 0.75, 0.60
 
     if effort >= threshold_hard:
-        return 2   # hard session — 2 rest days
+        min_rest_days = 2
     elif effort >= threshold_mod:
-        return 1   # moderate — 1 rest day
-    return 0       # easy run — can run tomorrow
+        min_rest_days = 1
+    else:
+        min_rest_days = 0
+
+    # Same-day feedback/watch data can add caution.
+    today_fb = feedback.get(now.date().isoformat())
+    if today_fb:
+        if today_fb.pain_flag:
+            min_rest_days = max(min_rest_days, 2)
+            reasons.append("pain was logged")
+        if today_fb.sleep_quality is not None and today_fb.sleep_quality <= 2:
+            min_rest_days = max(min_rest_days, 1)
+            reasons.append("low sleep quality")
+        if today_fb.hrv_ms is not None and today_fb.hrv_ms < 35:
+            min_rest_days = max(min_rest_days, 1)
+            reasons.append("low HRV")
+
+    if not reasons:
+        reasons.append("recent training load")
+
+    return {
+        "min_rest_days": min_rest_days,
+        "effort_score": round(effort * 100),
+        "reasons": reasons[:3],
+    }
+
+
+def _smart_recovery_days(last_run: NormalizedRun, profile: RunnerProfile) -> int:
+    """Backward-compatible wrapper used by older callers/tests."""
+    return _recovery_context(last_run, profile, [last_run] if last_run else [], {}, datetime.now())["min_rest_days"]
 
 
 def build_daily_summary(
@@ -74,14 +119,19 @@ def build_daily_summary(
     if runs:
         sorted_runs   = sorted(runs, key=lambda r: r.date, reverse=True)
         last_run      = sorted_runs[0]
-        days_inactive = max(0, (now - last_run.date).days)
-        min_rest_days = _smart_recovery_days(last_run, profile)
+        days_inactive = max(0, (now.date() - last_run.date.date()).days)
+        recovery_ctx  = _recovery_context(last_run, profile, runs, feedback, now)
+        min_rest_days = recovery_ctx["min_rest_days"]
     else:
         last_run      = None
         days_inactive = 999
         min_rest_days = 0
+        recovery_ctx  = {"min_rest_days": 0, "effort_score": 0, "reasons": []}
 
     in_recovery = days_inactive < min_rest_days
+    days_until_next_run = max(0, min_rest_days - days_inactive)
+    next_run_date = (now.date() + timedelta(days=days_until_next_run)) if last_run else now.date()
+    should_run_today = not in_recovery
 
     # ── Streak ────────────────────────────────────────────────────────────────
     streak_days = 0
@@ -128,20 +178,19 @@ def build_daily_summary(
 
     # Smart recovery overrides everything else
     if in_recovery and last_run:
-        days_to_next = min_rest_days - days_inactive
+        days_to_next = days_until_next_run
         intensity_label = _intensity_label(last_run, profile)
+        reason_text = ", ".join(recovery_ctx.get("reasons", [])[:2])
         if days_inactive == 0:
             status   = "rest"
-            headline = f"Good work today — rest now."
+            headline = "Good work today — recover now."
             subline  = (f"Your last run was {intensity_label}. "
-                        f"{'Tomorrow' if min_rest_days == 1 else f'In {min_rest_days} days'} "
-                        f"you'll be ready for the next session.")
+                        f"Next run: {'tomorrow' if min_rest_days == 1 else f'in {min_rest_days} days'}.")
         else:
             status   = "rest"
-            headline = (f"Rest day — next run in "
-                        f"{'1 day' if days_to_next == 1 else f'{days_to_next} days'}.")
-            subline  = (f"Your last run was {intensity_label}. "
-                        f"Recovery is part of training.")
+            headline = (f"No run today — next run "
+                        f"{'tomorrow' if days_to_next == 1 else f'in {days_to_next} days'}.")
+            subline  = (f"Reason: {reason_text}. Recovery is part of training.")
 
     elif risk_level == "high" or risk_score >= 70:
         status   = "warning"
@@ -181,6 +230,11 @@ def build_daily_summary(
         "days_inactive": days_inactive,
         "min_rest_days": min_rest_days,
         "in_recovery":   in_recovery,
+        "should_run_today": should_run_today,
+        "days_until_next_run": days_until_next_run,
+        "next_run_date": next_run_date.isoformat(),
+        "recovery_reasons": recovery_ctx.get("reasons", []),
+        "last_run_effort_score": recovery_ctx.get("effort_score", 0),
         "week_km":       week_km,
         "week_goal_km":  goal_km,
         "week_pct":      week_pct,
