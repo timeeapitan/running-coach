@@ -15,11 +15,11 @@ from web.auth import (
     host_credentials_set, get_host_garmin_credentials, secret_session_set,
 )
 from web.db import (
-    load_profile, save_profile, load_strava_token, save_strava_token,
+    load_profile, save_profile, load_activity_token, save_activity_token,
     load_feedback, save_feedback_entry, list_users, load_athlete_info, USE_DB,
     load_cached_summary, save_cached_summary, load_daily_cache_raw,
     load_cached_runs, save_cached_runs, invalidate_runs_cache,
-    load_cached_watch_health, save_cached_watch_health, invalidate_watch_health_cache,
+    load_cached_watch_health, save_cached_watch_health, invalidate_watch_health_cache, mark_sync_failed,
 )
 from running_coach.schemas.profile  import RunnerProfile
 from running_coach.schemas.feedback import ManualFeedback
@@ -79,7 +79,7 @@ def auth_session():
     token = {"provider": "garmin", "auth_mode": "secret_files", "session_dir": os.environ.get("GARTH_SESSION_DIR", "/etc/secrets")}
 
     try:
-        save_strava_token(username, token, display_name=name, athlete_data={})
+        save_activity_token(username, token, display_name=name, athlete_data={})
     except Exception as e:
         import traceback
         print("SUPABASE SAVE ERROR:", traceback.format_exc(), flush=True)
@@ -120,7 +120,7 @@ def _finish_garmin_login(email: str, password: str):
 
     try:
         # Verify that login + activities endpoint works before saving credentials.
-        GarminConnectParser(email, password).fetch_runs(max_runs=1)
+        GarminConnectParser(email, password).fetch_runs(max_runs=5)
     except Exception as e:
         import traceback
         print("GARMIN LOGIN ERROR:", traceback.format_exc(), flush=True)
@@ -136,7 +136,7 @@ def _finish_garmin_login(email: str, password: str):
     }
 
     try:
-        save_strava_token(username, token, display_name=name, athlete_data={})
+        save_activity_token(username, token, display_name=name, athlete_data={})
     except Exception as e:
         import traceback
         print("SUPABASE SAVE ERROR:", traceback.format_exc(), flush=True)
@@ -158,7 +158,6 @@ def _finish_garmin_login(email: str, password: str):
     session["user_name"] = name
     session["user_avatar"] = ""
 
-    invalidate_runs_cache(username)
     return redirect(url_for("dashboard"))
 
 
@@ -239,7 +238,7 @@ def _deserialize_runs(data: list):
     return runs
 
 def _get_garmin_parser(uid):
-    token = load_strava_token(uid) or {}
+    token = load_activity_token(uid) or {}
     from running_coach.parsers.garmin_connect import GarminConnectParser
 
     # Preferred Render mode: resume saved Garmin session from Secret Files.
@@ -256,28 +255,36 @@ def _get_garmin_parser(uid):
     raise RuntimeError("Missing Garmin session. Upload oauth1_token.json and oauth2_token.json as Render Secret Files.")
 
 def _load_runs(uid, force=False, auto_fetch=False):
-    """Load runs with a once-per-day auto sync.
+    """Load cached running history and sync Garmin only when needed.
 
-    Normal tabs read cache only. The Dashboard can pass auto_fetch=True:
-    if today's runs cache is missing, the app fetches from Garmin once, saves
-    runs_cache, and later page loads use the cache for the rest of the day.
-    /refresh still forces a fresh Garmin fetch.
+    v2 behavior:
+    - normal tabs read Supabase only;
+    - first Dashboard visit of the day syncs once if daily_cache is missing;
+    - /refresh force-syncs, but append/upsert keeps existing history.
     """
     cached = load_cached_runs(uid)
-    if cached is not None and not force:
-        return _deserialize_runs(cached)
-    if cached is None and not force and not auto_fetch:
-        return []
+
+    today_has_daily_cache = load_daily_cache_raw(uid) is not None
+    should_fetch = force or (auto_fetch and not today_has_daily_cache) or (cached is None and auto_fetch)
+
+    if not should_fetch:
+        return _deserialize_runs(cached) if cached is not None else []
 
     try:
-        runs = _get_garmin_parser(uid).fetch_runs(max_runs=200)
-        print(f"[GARMIN] fetched {len(runs)} runs", flush=True)
-        save_cached_runs(uid, _serialize_runs(runs))
-        return runs
+        runs = _get_garmin_parser(uid).fetch_runs(max_runs=30)
+        print(f"[GARMIN] fetched {len(runs)} recent runs", flush=True)
+        if runs:
+            save_cached_runs(uid, _serialize_runs(runs))
+        merged = load_cached_runs(uid)
+        return _deserialize_runs(merged) if merged is not None else runs
     except Exception as e:
         import traceback
         print("[GARMIN SYNC] fetch failed:", repr(e), flush=True)
         print(traceback.format_exc(), flush=True)
+        try:
+            mark_sync_failed(uid, str(e))
+        except Exception:
+            pass
         return _deserialize_runs(cached) if cached is not None else []
 
 def _load_watch_health(uid, date_obj=None, force=False, auto_fetch=False):
@@ -304,6 +311,10 @@ def _load_watch_health(uid, date_obj=None, force=False, auto_fetch=False):
         return watch
     except Exception as e:
         print("[GARMIN HEALTH] unavailable:", repr(e), flush=True)
+        try:
+            mark_sync_failed(uid, str(e), date_str)
+        except Exception:
+            pass
         cached = load_cached_watch_health(uid, date_str)
         return cached or {}
 
@@ -604,7 +615,7 @@ def refresh_summary():
     # Avoid repeatedly hitting Garmin if the user presses Sync several times.
     # This is especially important on Render because Garmin can rate-limit the shared IP.
     raw_cache = load_daily_cache_raw(uid) or {}
-    last_sync_text = raw_cache.get("watch_cached_at") or raw_cache.get("summary_cached_at")
+    last_sync_text = raw_cache.get("health_cached_at") or raw_cache.get("summary_cached_at")
     if last_sync_text and request.args.get("force") != "1":
         try:
             last_sync = datetime.fromisoformat(str(last_sync_text).replace("Z", "+00:00")).replace(tzinfo=None)
@@ -614,8 +625,7 @@ def refresh_summary():
         except Exception:
             pass
 
-    invalidate_runs_cache(uid)  # force fresh Garmin fetch now
-    invalidate_watch_health_cache(uid)  # force fresh watch health fetch now
+    # v2 cache is append-only; force=True fetches Garmin but does not wipe existing history.
     runs     = _load_runs(uid, force=True)
     feedback = load_feedback(uid)
     feedback, watch_health = _merge_watch_feedback(uid, feedback, force=True)

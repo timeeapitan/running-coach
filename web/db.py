@@ -1,494 +1,476 @@
-"""
-Database layer — Supabase for production, local files for development.
+"""Clean database layer for Running Coach v2.
 
-Username convention: user id / Garmin email as a string (e.g. "12345678").
-This is set once during OAuth and never changes.
+Garmin-only architecture:
+- users: one row per app user, with JSONB profile/activity_token/settings
+- runs_cache: one row per Garmin running activity
+- daily_cache: one row per user/day with watch metrics + coach summary JSON
+- feedback: optional manual notes/check-ins
 """
 
-import json, os
-from datetime import datetime
-from typing import Optional, Any
+from __future__ import annotations
+
+import json
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, date
+from typing import Any, Optional
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 USE_DB = bool(SUPABASE_URL and SUPABASE_KEY)
 
-import urllib.request, urllib.error
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "user_data")
 
-def _sb_request(method, table, data=None, query=""):
-    url     = f"{SUPABASE_URL}/rest/v1/{table}{query}"
-    print(f"[DB] {method} {url[:80]}", flush=True)  # debug — remove after fix
+
+def _json(value: Any, default: Any = None) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return default
+    return value
+
+
+def _sb_request(method: str, table: str, data: Any = None, query: str = "", prefer: str = "return=representation"):
+    if not USE_DB:
+        raise RuntimeError("Supabase is not configured")
+    url = f"{SUPABASE_URL}/rest/v1/{table}{query}"
     headers = {
-        "apikey":        SUPABASE_KEY,
+        "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-        "Prefer":        "return=representation",
+        "Content-Type": "application/json",
+        "Prefer": prefer,
     }
-    body = json.dumps(data).encode() if data else None
-    req  = urllib.request.Request(url, data=body, headers=headers, method=method)
+    body = json.dumps(data).encode("utf-8") if data is not None else None
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=20) as resp:
             raw = resp.read()
             return json.loads(raw) if raw else []
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Supabase {method} {table}: {e.code} {e.read().decode()}")
-
-def _sb_get(table, query):    return _sb_request("GET",    table, query=query)
-def _sb_upsert(table, data):  return _sb_request("POST",   table, data=data)
-def _sb_patch(table, data, q):return _sb_request("PATCH",  table, data=data, query=q)
-def _sb_delete(table, q):     return _sb_request("DELETE", table, query=q)
-def _sb_insert(table, data):  return _sb_request("POST",   table, data=data)
+        detail = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Supabase {method} {table}: {e.code} {detail}")
 
 
-# ── Profile ───────────────────────────────────────────────────────────────────
+def _sb_get(table: str, query: str):
+    return _sb_request("GET", table, query=query)
+
+
+def _sb_insert(table: str, data: Any):
+    return _sb_request("POST", table, data=data)
+
+
+def _sb_patch(table: str, data: dict, query: str):
+    return _sb_request("PATCH", table, data=data, query=query)
+
+
+def _sb_delete(table: str, query: str):
+    return _sb_request("DELETE", table, query=query)
+
+
+def _sb_upsert(table: str, data: Any, on_conflict: str):
+    query = "?on_conflict=" + urllib.parse.quote(on_conflict)
+    return _sb_request(
+        "POST",
+        table,
+        data=data,
+        query=query,
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+
+
+def _udir(username: str) -> str:
+    safe = "".join(c for c in str(username).lower() if c.isalnum() or c in "_-.")
+    d = os.path.join(DATA_DIR, safe)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+# ── Users / profile ──────────────────────────────────────────────────────────
 
 def load_profile(username: str) -> Optional[dict]:
     if not USE_DB:
-        return _file_load_profile(username)
-    rows = _sb_get("users", f"?username=eq.{username}&select=profile,display_name")
+        p = os.path.join(_udir(username), "profile.json")
+        return json.load(open(p)) if os.path.exists(p) else None
+    rows = _sb_get("users", f"?username=eq.{urllib.parse.quote(str(username))}&select=profile,display_name")
     if not rows:
         return None
-    d = rows[0].get("profile") or {}
-    if isinstance(d, str):
-        try:
-            d = json.loads(d)  # handle legacy double-encoded rows
-        except Exception:
-            d = {}
-    # Inject display_name into profile if missing
-    if rows[0].get("display_name") and not d.get("name"):
-        d["name"] = rows[0]["display_name"]
-    return d
+    profile = _json(rows[0].get("profile"), {}) or {}
+    if rows[0].get("display_name") and not profile.get("name"):
+        profile["name"] = rows[0]["display_name"]
+    return profile
+
 
 def save_profile(username: str, profile_dict: dict) -> None:
     if not USE_DB:
-        _file_save_profile(username, profile_dict)
+        with open(os.path.join(_udir(username), "profile.json"), "w") as f:
+            json.dump(profile_dict, f, indent=2)
         return
-    existing = _sb_get("users", f"?username=eq.{username}&select=username")
-    payload  = {"profile": profile_dict,  # stored as jsonb — do not pre-encode
-                "display_name": profile_dict.get("name", username)}
-    if existing:
-        _sb_patch("users", payload, f"?username=eq.{username}")
-    else:
-        _sb_insert("users", {"username": username, **payload})
-
-
-# ── activity provider credentials ──────────────────────────────────────────────────────────────
-
-def load_strava_token(username: str) -> Optional[dict]:
-    if not USE_DB:
-        return _file_load_token(username)
-    rows = _sb_get("users", f"?username=eq.{username}&select=strava_token")
-    if not rows or not rows[0].get("strava_token"):
-        return None
-    raw = rows[0]["strava_token"]
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)  # handle legacy double-encoded rows
-        except Exception:
-            return None
-    return raw
-
-def save_strava_token(username: str, token: dict,
-                      display_name: str = "", athlete_data: dict = None) -> None:
-    if not USE_DB:
-        _file_save_token(username, token)
-        return
-    existing = _sb_get("users", f"?username=eq.{username}&select=username")
-    name     = display_name or (athlete_data or {}).get("firstname", "") + \
-               " " + (athlete_data or {}).get("lastname", "")
-    avatar   = (athlete_data or {}).get("profile_medium", "")
-    payload  = {
-        "strava_token":  token,  # stored as jsonb — do not pre-encode
-        "display_name":  name.strip() or username,
-        "avatar_url":    avatar,
+    payload = {
+        "username": username,
+        "provider": "garmin",
+        "profile": profile_dict,
+        "display_name": profile_dict.get("name") or username,
+        "updated_at": datetime.utcnow().isoformat(),
     }
-    if existing:
-        _sb_patch("users", payload, f"?username=eq.{username}")
-    else:
-        _sb_insert("users", {"username": username, **payload})
+    _sb_upsert("users", payload, "username")
 
-def has_strava(username: str) -> bool:
-    return load_strava_token(username) is not None
+
+def load_activity_token(username: str) -> Optional[dict]:
+    if not USE_DB:
+        p = os.path.join(_udir(username), "activity_token.json")
+        return json.load(open(p)) if os.path.exists(p) else None
+    rows = _sb_get("users", f"?username=eq.{urllib.parse.quote(str(username))}&select=activity_token")
+    if not rows:
+        return None
+    return _json(rows[0].get("activity_token"), None)
+
+
+def save_activity_token(username: str, token: dict, display_name: str = "", athlete_data: dict | None = None) -> None:
+    if not USE_DB:
+        with open(os.path.join(_udir(username), "activity_token.json"), "w") as f:
+            json.dump(token, f, indent=2)
+        return
+    payload = {
+        "username": username,
+        "provider": "garmin",
+        "activity_token": token,
+        "display_name": (display_name or username).strip(),
+        "avatar_url": "",
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    _sb_upsert("users", payload, "username")
+
+
+def has_activity_provider(username: str) -> bool:
+    return load_activity_token(username) is not None
+
 
 def load_athlete_info(username: str) -> dict:
-    """Return display_name and avatar_url for the nav bar."""
     if not USE_DB:
-        d = _file_load_profile(username) or {}
-        return {"name": d.get("name", username), "avatar": ""}
-    rows = _sb_get("users", f"?username=eq.{username}&select=display_name,avatar_url")
+        profile = load_profile(username) or {}
+        return {"name": profile.get("name", username), "avatar": ""}
+    rows = _sb_get("users", f"?username=eq.{urllib.parse.quote(str(username))}&select=display_name,avatar_url")
     if not rows:
         return {"name": username, "avatar": ""}
-    return {"name": rows[0].get("display_name", username),
-            "avatar": rows[0].get("avatar_url", "")}
+    return {"name": rows[0].get("display_name") or username, "avatar": rows[0].get("avatar_url") or ""}
 
 
-# ── Feedback ──────────────────────────────────────────────────────────────────
+def list_users() -> list:
+    if not USE_DB:
+        if not os.path.exists(DATA_DIR):
+            return []
+        out = []
+        for u in os.listdir(DATA_DIR):
+            p = load_profile(u) or {}
+            out.append({"username": u, "name": p.get("name", u), "avatar": ""})
+        return out
+    rows = _sb_get("users", "?select=username,display_name,avatar_url&order=updated_at.desc")
+    return [{"username": r["username"], "name": r.get("display_name") or r["username"], "avatar": r.get("avatar_url") or ""} for r in rows]
+
+
+# ── Feedback / manual notes ──────────────────────────────────────────────────
 
 def load_feedback(username: str) -> dict:
     from running_coach.schemas.feedback import ManualFeedback
     if not USE_DB:
-        return _file_load_feedback(username)
-    rows   = _sb_get("feedback", f"?username=eq.{username}&order=date.desc&limit=90")
+        p = os.path.join(_udir(username), "feedback.json")
+        if not os.path.exists(p):
+            return {}
+        raw = json.load(open(p))
+        result = {}
+        for key, val in raw.items():
+            try:
+                val["date"] = datetime.fromisoformat(val["date"])
+                result[key] = ManualFeedback(**{k: v for k, v in val.items() if k in ManualFeedback.__dataclass_fields__})
+            except Exception:
+                pass
+        return result
+    rows = _sb_get("feedback", f"?username=eq.{urllib.parse.quote(str(username))}&order=entry_date.desc&limit=120")
     result = {}
     for row in rows:
-        key = row["date"]
-        val = row["data"]
-        if isinstance(val, str):
-            try: val = json.loads(val)
-            except: continue
-        val["date"] = datetime.fromisoformat(val["date"])
+        key = row.get("entry_date") or row.get("date")
+        val = _json(row.get("data"), {}) or {}
         try:
-            result[key] = ManualFeedback(**{
-                k: v for k, v in val.items()
-                if k in ManualFeedback.__dataclass_fields__
-            })
+            val["date"] = datetime.fromisoformat(val.get("date") or key)
+            result[key] = ManualFeedback(**{k: v for k, v in val.items() if k in ManualFeedback.__dataclass_fields__})
         except Exception:
             pass
     return result
+
 
 def save_feedback_entry(username: str, date_str: str, fb) -> None:
-    if not USE_DB:
-        _file_save_feedback_entry(username, date_str, fb)
-        return
     data = {
-        "date": fb.date.isoformat(), "rpe": fb.rpe, "mood": fb.mood,
-        "sleep_hours": fb.sleep_hours, "sleep_quality": fb.sleep_quality,
-        "hrv_ms": fb.hrv_ms, "pain_flag": fb.pain_flag,
-        "pain_location": fb.pain_location, "notes": fb.notes,
+        "date": fb.date.isoformat(),
+        "rpe": fb.rpe,
+        "mood": fb.mood,
+        "sleep_hours": fb.sleep_hours,
+        "sleep_quality": fb.sleep_quality,
+        "hrv_ms": fb.hrv_ms,
+        "pain_flag": fb.pain_flag,
+        "pain_location": fb.pain_location,
+        "notes": fb.notes,
     }
     data = {k: v for k, v in data.items() if v is not None}
-    data["date"]      = fb.date.isoformat()
     data["pain_flag"] = fb.pain_flag
-    _sb_delete("feedback", f"?username=eq.{username}&date=eq.{date_str}")
-    _sb_insert("feedback", {"username": username, "date": date_str,
-                             "data": json.dumps(data)})
-
-def list_users() -> list:
     if not USE_DB:
-        return _file_list_users()
-    rows = _sb_get("users", "?select=username,display_name,avatar_url")
-    return [{"username": r["username"],
-             "name":     r.get("display_name", r["username"]),
-             "avatar":   r.get("avatar_url", "")} for r in rows]
+        p = os.path.join(_udir(username), "feedback.json")
+        existing = json.load(open(p)) if os.path.exists(p) else {}
+        existing[date_str] = data
+        with open(p, "w") as f:
+            json.dump(existing, f, indent=2)
+        return
+    _sb_upsert("feedback", {"username": username, "entry_date": date_str, "data": data}, "username,entry_date")
 
 
-# ── File fallback ─────────────────────────────────────────────────────────────
+# ── Runs cache: one row per Garmin run ───────────────────────────────────────
 
-DATA_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "user_data"
-)
-
-def _udir(u):
-    safe = "".join(c for c in str(u).lower() if c.isalnum() or c == "_")
-    d = os.path.join(DATA_DIR, safe)
-    os.makedirs(os.path.join(d, "models"), exist_ok=True)
-    return d
-
-def _file_load_profile(u):
-    p = os.path.join(_udir(u), "profile.json")
-    return json.load(open(p)) if os.path.exists(p) else None
-
-def _file_save_profile(u, d):
-    with open(os.path.join(_udir(u), "profile.json"), "w") as f:
-        json.dump(d, f, indent=2)
-
-def _file_load_token(u):
-    p = os.path.join(_udir(u), "strava_token.json")
-    return json.load(open(p)) if os.path.exists(p) else None
-
-def _file_save_token(u, d):
-    with open(os.path.join(_udir(u), "strava_token.json"), "w") as f:
-        json.dump(d, f, indent=2)
-
-def _file_load_feedback(u):
-    from running_coach.schemas.feedback import ManualFeedback
-    p = os.path.join(_udir(u), "feedback.json")
-    if not os.path.exists(p):
-        return {}
-    with open(p) as f:
-        raw = json.load(f)
-    result = {}
-    for key, val in raw.items():
-        val["date"] = datetime.fromisoformat(val["date"])
-        try:
-            result[key] = ManualFeedback(**{
-                k: v for k, v in val.items()
-                if k in ManualFeedback.__dataclass_fields__
-            })
-        except Exception:
-            pass
-    return result
-
-def _file_save_feedback_entry(u, date_str, fb):
-    p = os.path.join(_udir(u), "feedback.json")
-    existing = json.load(open(p)) if os.path.exists(p) else {}
-    data = {
-        "date": fb.date.isoformat(), "rpe": fb.rpe, "mood": fb.mood,
-        "sleep_hours": fb.sleep_hours, "sleep_quality": fb.sleep_quality,
-        "hrv_ms": fb.hrv_ms, "pain_flag": fb.pain_flag,
-        "pain_location": fb.pain_location, "notes": fb.notes,
-    }
-    existing[date_str] = {k: v for k, v in data.items() if v is not None}
-    existing[date_str]["pain_flag"] = fb.pain_flag
-    existing[date_str]["date"]      = fb.date.isoformat()
-    with open(p, "w") as f:
-        json.dump(existing, f, indent=2)
-
-def _file_list_users():
-    if not os.path.exists(DATA_DIR):
-        return []
-    result = []
-    for u in os.listdir(DATA_DIR):
-        p = os.path.join(DATA_DIR, u, "profile.json")
-        if os.path.exists(p):
-            with open(p) as f:
-                d = json.load(f)
-            result.append({"username": u, "name": d.get("name", u), "avatar": ""})
-    return result
-
-
-# ── Daily summary cache ───────────────────────────────────────────────────────
-# Stored in Supabase under a "daily_cache" table, or as a JSON file locally.
-# Key: (username, date_str) — one row per user per day.
-# Expires automatically when the date changes (checked on read).
-
-def load_cached_summary(username: str) -> Optional[dict]:
-    """
-    Return today's cached summary for this user, or None if not cached yet.
-    'Today' is determined in the user's local date — we use the server date
-    as a reasonable proxy (close enough for a daily summary).
-    """
-    today = datetime.now().date().isoformat()
-
-    if not USE_DB:
-        return _file_load_cache(username, today)
-
+def _run_to_row(username: str, run: dict) -> dict:
+    activity_id = str(run.get("external_id") or run.get("activity_id") or run.get("date"))
+    distance_km = run.get("distance_km")
+    duration_min = run.get("duration_minutes")
+    pace = run.get("avg_pace_min_per_km")
+    training_load = None
     try:
-        rows = _sb_get("daily_cache",
-                       f"?username=eq.{username}&date=eq.{today}&select=summary")
-        if rows and rows[0].get("summary"):
-            raw = rows[0]["summary"]
-            if isinstance(raw, str):
-                try: raw = json.loads(raw)
-                except Exception: return None
-            # A row may exist only because watch data was cached first.
-            # Treat that as "no dashboard summary yet" so the app computes one.
-            if isinstance(raw, dict) and (raw.get("status") or raw.get("headline")):
-                return raw
-            return None
+        # Simple deterministic load proxy. Stored for trends, not as a medical metric.
+        training_load = round(float(distance_km or 0) * (float(run.get("avg_hr") or 140) / 140.0), 2)
     except Exception:
         pass
+    return {
+        "username": username,
+        "activity_id": activity_id,
+        "activity_date": run.get("date"),
+        "activity_type": run.get("activity_type"),
+        "distance_km": distance_km,
+        "duration_minutes": duration_min,
+        "avg_pace_min_per_km": pace,
+        "avg_hr": run.get("avg_hr"),
+        "max_hr": run.get("max_hr"),
+        "elevation_gain_m": run.get("elevation_gain_m"),
+        "cadence": run.get("cadence"),
+        "training_load": training_load,
+        "source": run.get("source") or "garmin_connect",
+        "raw_json": run,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+
+def _row_to_run(row: dict) -> dict:
+    raw = _json(row.get("raw_json"), {}) or {}
+    # Prefer normalized raw_json, but repair from columns if needed.
+    raw.setdefault("date", row.get("activity_date"))
+    raw.setdefault("activity_type", row.get("activity_type") or "outdoor_run")
+    raw.setdefault("distance_km", row.get("distance_km"))
+    raw.setdefault("duration_minutes", row.get("duration_minutes"))
+    raw.setdefault("avg_pace_min_per_km", row.get("avg_pace_min_per_km"))
+    raw.setdefault("avg_hr", row.get("avg_hr"))
+    raw.setdefault("max_hr", row.get("max_hr"))
+    raw.setdefault("elevation_gain_m", row.get("elevation_gain_m"))
+    raw.setdefault("cadence", row.get("cadence"))
+    raw.setdefault("source", row.get("source") or "garmin_cache")
+    raw.setdefault("external_id", row.get("activity_id"))
+    return raw
+
+
+def load_cached_runs(username: str) -> Optional[list]:
+    if not USE_DB:
+        p = os.path.join(_udir(username), "runs_cache.json")
+        if not os.path.exists(p):
+            return None
+        data = json.load(open(p))
+        return data.get("runs") or None
+    try:
+        rows = _sb_get(
+            "runs_cache",
+            f"?username=eq.{urllib.parse.quote(str(username))}&select=*&order=activity_date.desc&limit=1000",
+        )
+        if not rows:
+            return None
+        return [_row_to_run(r) for r in rows]
+    except Exception as e:
+        print(f"[cache] load_cached_runs error: {e}", flush=True)
+        return None
+
+
+def save_cached_runs(username: str, runs_data: list) -> None:
+    """Append/update runs. Never wipes existing history."""
+    if not runs_data:
+        print("[cache] no runs to save; keeping existing cache", flush=True)
+        return
+    if not USE_DB:
+        existing = load_cached_runs(username) or []
+        by_id = {str(r.get("external_id") or r.get("date")): r for r in existing}
+        for r in runs_data:
+            by_id[str(r.get("external_id") or r.get("date"))] = r
+        merged = sorted(by_id.values(), key=lambda r: r.get("date", ""), reverse=True)
+        with open(os.path.join(_udir(username), "runs_cache.json"), "w") as f:
+            json.dump({"runs": merged, "updated_at": datetime.utcnow().isoformat()}, f, indent=2)
+        return
+    try:
+        rows = [_run_to_row(username, r) for r in runs_data if r]
+        if rows:
+            _sb_upsert("runs_cache", rows, "username,activity_id")
+            print(f"[cache] upserted {len(rows)} run rows", flush=True)
+    except Exception as e:
+        print(f"[cache] save_cached_runs error (non-fatal): {e}", flush=True)
+
+
+def invalidate_runs_cache(username: str) -> None:
+    """No-op for v2: runs_cache is historical. /refresh appends new rows instead of wiping."""
+    return
+
+
+# ── Daily cache: one row per user/day ────────────────────────────────────────
+
+def _today() -> str:
+    return datetime.now().date().isoformat()
+
+
+def _normalise_daily(row: dict | None) -> Optional[dict]:
+    if not row:
+        return None
+    summary = _json(row.get("summary"), {}) or {}
+    watch = _json(row.get("watch_health"), None)
+    if watch is None and isinstance(summary, dict):
+        watch = summary.get("watch_health")
+    if watch:
+        summary["watch_health"] = watch
+    for k in ("should_run_today", "next_run_date", "recommended_session", "coach_message", "coach_reason", "risk_level", "last_sync", "sync_status", "sync_error"):
+        if row.get(k) is not None:
+            summary[k] = row.get(k)
+    return summary
+
+
+def _load_daily_cache_row(username: str, date_str: str) -> Optional[dict]:
+    if not USE_DB:
+        p = os.path.join(_udir(username), "daily_cache.json")
+        if not os.path.exists(p):
+            return None
+        return (json.load(open(p)) or {}).get(date_str)
+    try:
+        rows = _sb_get(
+            "daily_cache",
+            f"?username=eq.{urllib.parse.quote(str(username))}&cache_date=eq.{date_str}&select=*",
+        )
+        return _normalise_daily(rows[0]) if rows else None
+    except Exception as e:
+        print(f"[cache] load daily_cache error: {e}", flush=True)
+        return None
+
+
+def load_daily_cache_raw(username: str, date_str: str | None = None) -> Optional[dict]:
+    return _load_daily_cache_row(username, date_str or _today())
+
+
+def load_cached_summary(username: str) -> Optional[dict]:
+    summary = _load_daily_cache_row(username, _today())
+    if isinstance(summary, dict) and (summary.get("status") or summary.get("headline") or summary.get("coach_message")):
+        return summary
     return None
 
 
 def save_cached_summary(username: str, summary: dict) -> None:
-    """Save today's dashboard summary, preserving any watch_health already cached for today."""
-    today = datetime.now().date().isoformat()
-    if isinstance(summary, dict):
-        summary["summary_cached_at"] = datetime.now().isoformat()
-
-    existing = None
+    date_str = _today()
+    summary = dict(summary or {})
+    summary["summary_cached_at"] = datetime.utcnow().isoformat()
+    if summary.get("headline") and not summary.get("coach_message"):
+        summary["coach_message"] = summary.get("headline")
+    if summary.get("subline") and not summary.get("coach_reason"):
+        summary["coach_reason"] = summary.get("subline")
     if not USE_DB:
-        existing = _file_load_cache(username, today) or {}
-        if isinstance(existing, dict) and existing.get("watch_health") and not summary.get("watch_health"):
+        p = os.path.join(_udir(username), "daily_cache.json")
+        data = json.load(open(p)) if os.path.exists(p) else {}
+        existing = data.get(date_str) or {}
+        if existing.get("watch_health") and not summary.get("watch_health"):
             summary["watch_health"] = existing["watch_health"]
-            if existing.get("watch_cached_at"):
-                summary["watch_cached_at"] = existing.get("watch_cached_at")
-        _file_save_cache(username, today, summary)
-        return
-
-    try:
-        rows = _sb_get("daily_cache", f"?username=eq.{username}&date=eq.{today}&select=summary")
-        if rows and rows[0].get("summary"):
-            existing = rows[0]["summary"]
-            if isinstance(existing, str):
-                try: existing = json.loads(existing)
-                except Exception: existing = {}
-        if isinstance(existing, dict) and existing.get("watch_health") and not summary.get("watch_health"):
-            summary["watch_health"] = existing["watch_health"]
-            if existing.get("watch_cached_at"):
-                summary["watch_cached_at"] = existing.get("watch_cached_at")
-
-        _sb_delete("daily_cache", f"?username=eq.{username}&date=eq.{today}")
-        _sb_insert("daily_cache", {
-            "username": username,
-            "date":     today,
-            "summary":  summary,
-        })
-    except Exception as e:
-        print(f"Cache save failed (non-fatal): {e}")
-
-
-# ── File fallback for cache ───────────────────────────────────────────────────
-
-def _file_load_cache(username: str, today: str) -> Optional[dict]:
-    p = os.path.join(_udir(username), "daily_cache.json")
-    if not os.path.exists(p):
-        return None
-    with open(p) as f:
-        data = json.load(f)
-    # Only return if it was computed today
-    if data.get("date") == today:
-        summary = data.get("summary")
-        if isinstance(summary, dict) and (summary.get("status") or summary.get("headline")):
-            return summary
-    return None
-
-
-def _file_save_cache(username: str, today: str, summary: dict) -> None:
-    p = os.path.join(_udir(username), "daily_cache.json")
-    with open(p, "w") as f:
-        json.dump({"date": today, "summary": summary}, f, indent=2)
-
-
-# ── Runs cache ────────────────────────────────────────────────────────────────
-# Caches activity runs in Supabase so navigation does not hit the activity provider
-# on every page. The cache is daily: if it was not written today, Dashboard
-# will sync once from Garmin; after that all tabs use today's cached data.
-
-def load_cached_runs(username: str) -> Optional[list]:
-    """Return today's cached runs as list of dicts, or None if missing/old."""
-    if not USE_DB:
-        return _file_load_runs_cache(username)
-    try:
-        rows = _sb_get("runs_cache", f"?username=eq.{username}&select=runs,cached_at")
-        if not rows or not rows[0].get("runs"):
-            return None
-        cached_at = rows[0].get("cached_at", "")
-        if cached_at:
-            cached_day = cached_at[:10]
-            today = datetime.now().date().isoformat()
-            if cached_day != today:
-                return None
-        raw = rows[0]["runs"]
-        if isinstance(raw, str):
-            try: return json.loads(raw)
-            except: return None
-        return raw
-    except Exception as e:
-        print(f"[cache] load_cached_runs error: {e}")
-        return None
-
-def save_cached_runs(username: str, runs_data: list) -> None:
-    """Save serialised runs to cache."""
-    if not USE_DB:
-        _file_save_runs_cache(username, runs_data)
-        return
-    try:
-        _sb_delete("runs_cache", f"?username=eq.{username}")
-        _sb_insert("runs_cache", {
-            "username": username,
-            "runs": runs_data,  # jsonb — no pre-encoding
-        })
-    except Exception as e:
-        print(f"[cache] save_cached_runs error (non-fatal): {e}")
-
-def invalidate_runs_cache(username: str) -> None:
-    """Force next page load to re-fetch from Strava."""
-    if not USE_DB:
-        p = os.path.join(_udir(username), "runs_cache.json")
-        if os.path.exists(p): os.unlink(p)
-        return
-    try:
-        _sb_delete("runs_cache", f"?username=eq.{username}")
-    except Exception:
-        pass
-
-def _file_load_runs_cache(username: str) -> Optional[list]:
-    p = os.path.join(_udir(username), "runs_cache.json")
-    if not os.path.exists(p): return None
-    with open(p) as f: data = json.load(f)
-    today = datetime.now().date().isoformat()
-    if data.get("date") != today: return None
-    return data.get("runs")
-
-def _file_save_runs_cache(username: str, runs_data: list) -> None:
-    p = os.path.join(_udir(username), "runs_cache.json")
-    with open(p, "w") as f:
-        json.dump({"date": datetime.now().date().isoformat(), "runs": runs_data}, f)
-
-
-# ── Watch health cache stored inside daily_cache ──────────────────────────────
-# No separate watch_cache table is used. The daily_cache.summary JSON stores:
-# { ..., "watch_health": {sleep_hours, sleep_quality, hrv_ms, resting_hr, ...} }
-
-def _load_daily_cache_row(username: str, date_str: str) -> Optional[dict]:
-    if not USE_DB:
-        p = os.path.join(_udir(username), "daily_cache_by_date.json")
-        if not os.path.exists(p):
-            return None
-        try:
-            return json.load(open(p)).get(date_str)
-        except Exception:
-            return None
-    try:
-        rows = _sb_get("daily_cache",
-                       f"?username=eq.{username}&date=eq.{date_str}&select=summary")
-        if rows and rows[0].get("summary"):
-            raw = rows[0]["summary"]
-            if isinstance(raw, str):
-                try: return json.loads(raw)
-                except Exception: return None
-            return raw
-    except Exception as e:
-        print(f"[cache] load daily_cache row error: {e}", flush=True)
-    return None
-
-def load_daily_cache_raw(username: str, date_str: str = None) -> Optional[dict]:
-    """Return the raw daily_cache.summary row, including watch-only rows.
-
-    Used by /refresh to enforce a cooldown and avoid repeatedly hitting Garmin.
-    """
-    if date_str is None:
-        date_str = datetime.now().date().isoformat()
-    return _load_daily_cache_row(username, date_str)
-
-
-def _save_daily_cache_row(username: str, date_str: str, summary: dict) -> None:
-    if not USE_DB:
-        p = os.path.join(_udir(username), "daily_cache_by_date.json")
-        try:
-            data = json.load(open(p)) if os.path.exists(p) else {}
-        except Exception:
-            data = {}
         data[date_str] = summary
         with open(p, "w") as f:
             json.dump(data, f, indent=2)
         return
-    _sb_delete("daily_cache", f"?username=eq.{username}&date=eq.{date_str}")
-    _sb_insert("daily_cache", {
+    existing = _load_daily_cache_row(username, date_str) or {}
+    if existing.get("watch_health") and not summary.get("watch_health"):
+        summary["watch_health"] = existing["watch_health"]
+    payload = {
         "username": username,
-        "date": date_str,
+        "cache_date": date_str,
         "summary": summary,
-    })
+        "watch_health": summary.get("watch_health"),
+        "should_run_today": summary.get("should_run_today"),
+        "next_run_date": summary.get("next_run_date"),
+        "recommended_session": summary.get("recommended_session") or summary.get("rec_type"),
+        "coach_message": summary.get("coach_message") or summary.get("headline"),
+        "coach_reason": summary.get("coach_reason") or summary.get("subline"),
+        "risk_level": summary.get("risk_level"),
+        "last_sync": summary.get("health_cached_at") or summary.get("summary_cached_at") or datetime.utcnow().isoformat(),
+        "sync_status": summary.get("sync_status") or "ok",
+        "sync_error": summary.get("sync_error"),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    _sb_upsert("daily_cache", payload, "username,cache_date")
+
 
 def load_cached_watch_health(username: str, date_str: str) -> Optional[dict]:
-    summary = _load_daily_cache_row(username, date_str)
-    if not summary:
+    row = _load_daily_cache_row(username, date_str)
+    if not row:
         return None
-    watch = summary.get("watch_health")
+    watch = row.get("watch_health")
     return watch if isinstance(watch, dict) else None
+
 
 def save_cached_watch_health(username: str, date_str: str, health: dict) -> None:
     if not health:
         return
-    try:
-        summary = _load_daily_cache_row(username, date_str) or {}
-        summary["watch_health"] = health
-        summary["watch_cached_at"] = datetime.now().isoformat()
-        _save_daily_cache_row(username, date_str, summary)
-    except Exception as e:
-        print(f"[cache] save watch health into daily_cache failed (non-fatal): {e}", flush=True)
+    summary = _load_daily_cache_row(username, date_str) or {}
+    summary["watch_health"] = health
+    summary["health_cached_at"] = datetime.utcnow().isoformat()
+    summary["sync_status"] = "ok"
+    if not USE_DB:
+        p = os.path.join(_udir(username), "daily_cache.json")
+        data = json.load(open(p)) if os.path.exists(p) else {}
+        data[date_str] = summary
+        with open(p, "w") as f:
+            json.dump(data, f, indent=2)
+        return
+    payload = {
+        "username": username,
+        "cache_date": date_str,
+        "summary": summary,
+        "watch_health": health,
+        "last_sync": summary["health_cached_at"],
+        "sync_status": "ok",
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    _sb_upsert("daily_cache", payload, "username,cache_date")
 
-def invalidate_watch_health_cache(username: str, date_str: str = None) -> None:
-    # Keep the daily coaching summary, but remove watch_health from daily_cache.
-    if date_str is None:
-        date_str = datetime.now().date().isoformat()
-    try:
-        summary = _load_daily_cache_row(username, date_str) or {}
-        if "watch_health" in summary:
-            summary.pop("watch_health", None)
-            summary.pop("watch_cached_at", None)
-            _save_daily_cache_row(username, date_str, summary)
-    except Exception:
-        pass
+
+def mark_sync_failed(username: str, error: str, date_str: str | None = None) -> None:
+    date_str = date_str or _today()
+    summary = _load_daily_cache_row(username, date_str) or {}
+    summary["sync_status"] = "failed"
+    summary["sync_error"] = str(error)[:500]
+    summary["last_sync"] = datetime.utcnow().isoformat()
+    if not USE_DB:
+        p = os.path.join(_udir(username), "daily_cache.json")
+        data = json.load(open(p)) if os.path.exists(p) else {}
+        data[date_str] = summary
+        with open(p, "w") as f:
+            json.dump(data, f, indent=2)
+        return
+    _sb_upsert("daily_cache", {
+        "username": username,
+        "cache_date": date_str,
+        "summary": summary,
+        "last_sync": summary["last_sync"],
+        "sync_status": "failed",
+        "sync_error": summary["sync_error"],
+        "updated_at": datetime.utcnow().isoformat(),
+    }, "username,cache_date")
+
+
+def invalidate_watch_health_cache(username: str, date_str: str | None = None) -> None:
+    # Historical daily rows are kept. Force refresh is controlled by /refresh cooldown.
+    return
