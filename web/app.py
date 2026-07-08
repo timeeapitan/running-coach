@@ -19,6 +19,7 @@ from web.db import (
     load_feedback, save_feedback_entry, list_users, load_athlete_info, USE_DB,
     load_cached_summary, save_cached_summary,
     load_cached_runs, save_cached_runs, invalidate_runs_cache,
+    load_cached_watch_health, save_cached_watch_health, invalidate_watch_health_cache,
 )
 from running_coach.schemas.profile  import RunnerProfile
 from running_coach.schemas.feedback import ManualFeedback
@@ -217,19 +218,36 @@ def _load_runs(uid):
         print(traceback.format_exc(), flush=True)
         return []
 
-def _load_watch_health(uid, date_obj=None):
+def _load_watch_health(uid, date_obj=None, force=False):
+    """Load daily watch metrics from cache first; fetch from Garmin only when needed.
+
+    This keeps pages like Notes fast. /refresh passes force=True and updates the cache.
+    """
+    if date_obj is None:
+        date_obj = datetime.now().date()
+    date_str = date_obj.isoformat() if hasattr(date_obj, "isoformat") else str(date_obj)
+
+    if not force:
+        cached = load_cached_watch_health(uid, date_str)
+        if cached is not None:
+            return cached
+
     try:
-        return _get_garmin_parser(uid).fetch_daily_health(date_obj)
+        watch = _get_garmin_parser(uid).fetch_daily_health(date_obj) or {}
+        if watch:
+            save_cached_watch_health(uid, date_str, watch)
+        return watch
     except Exception as e:
         print("[GARMIN HEALTH] unavailable:", repr(e), flush=True)
-        return {}
+        cached = load_cached_watch_health(uid, date_str)
+        return cached or {}
 
-def _merge_watch_feedback(uid, feedback):
-    """Overlay watch sleep/HRV data on today's feedback without overwriting manual mood/RPE/pain."""
+def _merge_watch_feedback(uid, feedback, force=False):
+    """Overlay cached watch sleep/HRV data on today's feedback without overwriting manual mood/RPE/pain."""
     from running_coach.schemas.feedback import ManualFeedback
     today = datetime.now().date()
     key = today.isoformat()
-    watch = _load_watch_health(uid, today)
+    watch = _load_watch_health(uid, today, force=force)
     if not watch:
         return feedback, {}
     existing = feedback.get(key)
@@ -480,9 +498,10 @@ def refresh_summary():
         return redirect(url_for("dashboard"))
 
     invalidate_runs_cache(uid)  # force fresh Garmin fetch now
+    invalidate_watch_health_cache(uid)  # force fresh watch health fetch now
     runs     = _load_runs(uid)
     feedback = load_feedback(uid)
-    feedback, watch_health = _merge_watch_feedback(uid, feedback)
+    feedback, watch_health = _merge_watch_feedback(uid, feedback, force=True)
     coach    = _get_coach(uid, profile)
     analysis = coach.analyze(runs, feedback)
 

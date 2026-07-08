@@ -73,3 +73,19 @@ create table if not exists runs_cache (
 alter table runs_cache enable row level security;
 create policy "service role full access on runs_cache"
   on runs_cache for all using (true);
+
+
+-- Watch health cache — stores daily sleep/HRV/resting HR/body battery/stress
+-- Normal pages read this cache; /refresh updates it from Garmin.
+create table if not exists watch_cache (
+  id          bigserial primary key,
+  username    text not null references users(username) on delete cascade,
+  date        text not null,
+  health      jsonb not null,
+  cached_at   timestamp with time zone default now(),
+  unique(username, date)
+);
+create index if not exists watch_cache_username_date_idx on watch_cache(username, date);
+alter table watch_cache enable row level security;
+create policy "service role full access on watch_cache"
+  on watch_cache for all using (true);

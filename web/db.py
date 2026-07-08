@@ -391,3 +391,79 @@ def _file_save_runs_cache(username: str, runs_data: list) -> None:
     p = os.path.join(_udir(username), "runs_cache.json")
     with open(p, "w") as f:
         json.dump({"cached_at": time.time(), "runs": runs_data}, f)
+
+
+# ── Watch health cache ───────────────────────────────────────────────────────
+# One row per user per date. Used for sleep, HRV, resting HR, body battery, stress.
+# Garmin health endpoints are slow, so normal pages read this cache. /refresh updates it.
+
+def load_cached_watch_health(username: str, date_str: str) -> Optional[dict]:
+    if not USE_DB:
+        return _file_load_watch_cache(username, date_str)
+    try:
+        rows = _sb_get("watch_cache",
+                       f"?username=eq.{username}&date=eq.{date_str}&select=health")
+        if rows and rows[0].get("health"):
+            raw = rows[0]["health"]
+            if isinstance(raw, str):
+                try: return json.loads(raw)
+                except: return None
+            return raw
+    except Exception as e:
+        print(f"[cache] load_cached_watch_health error: {e}")
+    return None
+
+def save_cached_watch_health(username: str, date_str: str, health: dict) -> None:
+    if not USE_DB:
+        _file_save_watch_cache(username, date_str, health)
+        return
+    try:
+        _sb_delete("watch_cache", f"?username=eq.{username}&date=eq.{date_str}")
+        _sb_insert("watch_cache", {
+            "username": username,
+            "date": date_str,
+            "health": health,
+        })
+    except Exception as e:
+        print(f"[cache] save_cached_watch_health error (non-fatal): {e}")
+
+def invalidate_watch_health_cache(username: str, date_str: str = None) -> None:
+    if not USE_DB:
+        if date_str:
+            p = os.path.join(_udir(username), "watch_cache.json")
+            if os.path.exists(p):
+                try:
+                    data = json.load(open(p))
+                    data.pop(date_str, None)
+                    with open(p, "w") as f: json.dump(data, f, indent=2)
+                except Exception: pass
+        else:
+            p = os.path.join(_udir(username), "watch_cache.json")
+            if os.path.exists(p): os.unlink(p)
+        return
+    try:
+        q = f"?username=eq.{username}"
+        if date_str:
+            q += f"&date=eq.{date_str}"
+        _sb_delete("watch_cache", q)
+    except Exception:
+        pass
+
+def _file_load_watch_cache(username: str, date_str: str) -> Optional[dict]:
+    p = os.path.join(_udir(username), "watch_cache.json")
+    if not os.path.exists(p): return None
+    try:
+        data = json.load(open(p))
+        return data.get(date_str)
+    except Exception:
+        return None
+
+def _file_save_watch_cache(username: str, date_str: str, health: dict) -> None:
+    p = os.path.join(_udir(username), "watch_cache.json")
+    try:
+        data = json.load(open(p)) if os.path.exists(p) else {}
+    except Exception:
+        data = {}
+    data[date_str] = health
+    with open(p, "w") as f:
+        json.dump(data, f, indent=2)
