@@ -269,30 +269,49 @@ def load_cached_summary(username: str) -> Optional[dict]:
         if rows and rows[0].get("summary"):
             raw = rows[0]["summary"]
             if isinstance(raw, str):
-                try: return json.loads(raw)
-                except: return None
-            return raw
+                try: raw = json.loads(raw)
+                except Exception: return None
+            # A row may exist only because watch data was cached first.
+            # Treat that as "no dashboard summary yet" so the app computes one.
+            if isinstance(raw, dict) and (raw.get("status") or raw.get("headline")):
+                return raw
+            return None
     except Exception:
         pass
     return None
 
 
 def save_cached_summary(username: str, summary: dict) -> None:
-    """Save today's summary. Overwrites any existing entry for today."""
+    """Save today's dashboard summary, preserving any watch_health already cached for today."""
     today = datetime.now().date().isoformat()
 
+    existing = None
     if not USE_DB:
+        existing = _file_load_cache(username, today) or {}
+        if isinstance(existing, dict) and existing.get("watch_health") and not summary.get("watch_health"):
+            summary["watch_health"] = existing["watch_health"]
+            if existing.get("watch_cached_at"):
+                summary["watch_cached_at"] = existing.get("watch_cached_at")
         _file_save_cache(username, today, summary)
         return
 
     try:
-        # Delete old entry for today then insert fresh
-        _sb_delete("daily_cache",
-                   f"?username=eq.{username}&date=eq.{today}")
+        rows = _sb_get("daily_cache", f"?username=eq.{username}&date=eq.{today}&select=summary")
+        if rows and rows[0].get("summary"):
+            existing = rows[0]["summary"]
+            if isinstance(existing, str):
+                try: existing = json.loads(existing)
+                except Exception: existing = {}
+        if isinstance(existing, dict) and existing.get("watch_health") and not summary.get("watch_health"):
+            summary["watch_health"] = existing["watch_health"]
+            if existing.get("watch_cached_at"):
+                summary["watch_cached_at"] = existing.get("watch_cached_at")
+
+        _sb_delete("daily_cache", f"?username=eq.{username}&date=eq.{today}")
         _sb_insert("daily_cache", {
             "username": username,
             "date":     today,
-            "summary":  json.dumps(summary),
+            "summary":  summary,
         })
     except Exception as e:
         print(f"Cache save failed (non-fatal): {e}")
@@ -308,7 +327,9 @@ def _file_load_cache(username: str, today: str) -> Optional[dict]:
         data = json.load(f)
     # Only return if it was computed today
     if data.get("date") == today:
-        return data.get("summary")
+        summary = data.get("summary")
+        if isinstance(summary, dict) and (summary.get("status") or summary.get("headline")):
+            return summary
     return None
 
 
@@ -385,77 +406,77 @@ def _file_save_runs_cache(username: str, runs_data: list) -> None:
         json.dump({"date": datetime.now().date().isoformat(), "runs": runs_data}, f)
 
 
-# ── Watch health cache ───────────────────────────────────────────────────────
-# One row per user per date. Used for sleep, HRV, resting HR, body battery, stress.
-# Garmin health endpoints are slow, so normal pages read this cache. /refresh updates it.
+# ── Watch health cache stored inside daily_cache ──────────────────────────────
+# No separate watch_cache table is used. The daily_cache.summary JSON stores:
+# { ..., "watch_health": {sleep_hours, sleep_quality, hrv_ms, resting_hr, ...} }
 
-def load_cached_watch_health(username: str, date_str: str) -> Optional[dict]:
+def _load_daily_cache_row(username: str, date_str: str) -> Optional[dict]:
     if not USE_DB:
-        return _file_load_watch_cache(username, date_str)
+        p = os.path.join(_udir(username), "daily_cache_by_date.json")
+        if not os.path.exists(p):
+            return None
+        try:
+            return json.load(open(p)).get(date_str)
+        except Exception:
+            return None
     try:
-        rows = _sb_get("watch_cache",
-                       f"?username=eq.{username}&date=eq.{date_str}&select=health")
-        if rows and rows[0].get("health"):
-            raw = rows[0]["health"]
+        rows = _sb_get("daily_cache",
+                       f"?username=eq.{username}&date=eq.{date_str}&select=summary")
+        if rows and rows[0].get("summary"):
+            raw = rows[0]["summary"]
             if isinstance(raw, str):
                 try: return json.loads(raw)
-                except: return None
+                except Exception: return None
             return raw
     except Exception as e:
-        print(f"[cache] load_cached_watch_health error: {e}")
+        print(f"[cache] load daily_cache row error: {e}", flush=True)
     return None
 
-def save_cached_watch_health(username: str, date_str: str, health: dict) -> None:
+def _save_daily_cache_row(username: str, date_str: str, summary: dict) -> None:
     if not USE_DB:
-        _file_save_watch_cache(username, date_str, health)
+        p = os.path.join(_udir(username), "daily_cache_by_date.json")
+        try:
+            data = json.load(open(p)) if os.path.exists(p) else {}
+        except Exception:
+            data = {}
+        data[date_str] = summary
+        with open(p, "w") as f:
+            json.dump(data, f, indent=2)
+        return
+    _sb_delete("daily_cache", f"?username=eq.{username}&date=eq.{date_str}")
+    _sb_insert("daily_cache", {
+        "username": username,
+        "date": date_str,
+        "summary": summary,
+    })
+
+def load_cached_watch_health(username: str, date_str: str) -> Optional[dict]:
+    summary = _load_daily_cache_row(username, date_str)
+    if not summary:
+        return None
+    watch = summary.get("watch_health")
+    return watch if isinstance(watch, dict) else None
+
+def save_cached_watch_health(username: str, date_str: str, health: dict) -> None:
+    if not health:
         return
     try:
-        _sb_delete("watch_cache", f"?username=eq.{username}&date=eq.{date_str}")
-        _sb_insert("watch_cache", {
-            "username": username,
-            "date": date_str,
-            "health": health,
-        })
+        summary = _load_daily_cache_row(username, date_str) or {}
+        summary["watch_health"] = health
+        summary["watch_cached_at"] = datetime.now().isoformat()
+        _save_daily_cache_row(username, date_str, summary)
     except Exception as e:
-        print(f"[cache] save_cached_watch_health error (non-fatal): {e}")
+        print(f"[cache] save watch health into daily_cache failed (non-fatal): {e}", flush=True)
 
 def invalidate_watch_health_cache(username: str, date_str: str = None) -> None:
-    if not USE_DB:
-        if date_str:
-            p = os.path.join(_udir(username), "watch_cache.json")
-            if os.path.exists(p):
-                try:
-                    data = json.load(open(p))
-                    data.pop(date_str, None)
-                    with open(p, "w") as f: json.dump(data, f, indent=2)
-                except Exception: pass
-        else:
-            p = os.path.join(_udir(username), "watch_cache.json")
-            if os.path.exists(p): os.unlink(p)
-        return
+    # Keep the daily coaching summary, but remove watch_health from daily_cache.
+    if date_str is None:
+        date_str = datetime.now().date().isoformat()
     try:
-        q = f"?username=eq.{username}"
-        if date_str:
-            q += f"&date=eq.{date_str}"
-        _sb_delete("watch_cache", q)
+        summary = _load_daily_cache_row(username, date_str) or {}
+        if "watch_health" in summary:
+            summary.pop("watch_health", None)
+            summary.pop("watch_cached_at", None)
+            _save_daily_cache_row(username, date_str, summary)
     except Exception:
         pass
-
-def _file_load_watch_cache(username: str, date_str: str) -> Optional[dict]:
-    p = os.path.join(_udir(username), "watch_cache.json")
-    if not os.path.exists(p): return None
-    try:
-        data = json.load(open(p))
-        return data.get(date_str)
-    except Exception:
-        return None
-
-def _file_save_watch_cache(username: str, date_str: str, health: dict) -> None:
-    p = os.path.join(_udir(username), "watch_cache.json")
-    try:
-        data = json.load(open(p)) if os.path.exists(p) else {}
-    except Exception:
-        data = {}
-    data[date_str] = health
-    with open(p, "w") as f:
-        json.dump(data, f, indent=2)

@@ -229,8 +229,8 @@ def _load_runs(uid, force=False, auto_fetch=False):
 def _load_watch_health(uid, date_obj=None, force=False, auto_fetch=False):
     """Load daily watch metrics with a once-per-day auto sync.
 
-    If today's watch_cache is missing and auto_fetch=True, fetch Garmin once,
-    save watch_cache, and reuse it for the rest of the day. Notes and other
+    If today's daily_cache is missing and auto_fetch=True, fetch Garmin once,
+    save daily_cache, and reuse it for the rest of the day. Notes and other
     tabs keep reading cache only. /refresh still forces a fresh fetch.
     """
     if date_obj is None:
@@ -357,7 +357,7 @@ def dashboard():
 
     # Dashboard is the only normal page that may auto-sync.
     # If today's cache is missing, this fetches Garmin once and saves cache.
-    # Later visits today read from runs_cache/watch_cache instantly.
+    # Later visits today read from runs_cache/daily_cache instantly.
     runs     = _load_runs(uid, auto_fetch=True)
     feedback = load_feedback(uid)
     feedback, watch_health = _merge_watch_feedback(uid, feedback, auto_fetch=True)
