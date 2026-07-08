@@ -349,67 +349,39 @@ def _file_save_cache(username: str, today: str, summary: dict) -> None:
 def load_cached_runs(username: str) -> Optional[list]:
     """Return today's cached runs as list of dicts, or None if missing/old."""
     if not USE_DB:
-        cached = _file_load_runs_cache(username)
-        print(f"[cache] runs_cache file load: {len(cached or [])} runs" if cached is not None else "[cache] runs_cache file miss", flush=True)
-        return cached
+        return _file_load_runs_cache(username)
     try:
         rows = _sb_get("runs_cache", f"?username=eq.{username}&select=runs,cached_at")
         if not rows or not rows[0].get("runs"):
-            print(f"[cache] runs_cache miss for {username}", flush=True)
             return None
         cached_at = rows[0].get("cached_at", "")
         if cached_at:
             cached_day = cached_at[:10]
             today = datetime.now().date().isoformat()
             if cached_day != today:
-                print(f"[cache] runs_cache stale for {username}: {cached_at}", flush=True)
                 return None
         raw = rows[0]["runs"]
         if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except Exception as exc:
-                print(f"[cache] runs_cache JSON decode failed: {exc}", flush=True)
-                return None
-        if not isinstance(raw, list):
-            print(f"[cache] runs_cache invalid type: {type(raw).__name__}", flush=True)
-            return None
-        print(f"[cache] runs_cache hit for {username}: {len(raw)} runs", flush=True)
+            try: return json.loads(raw)
+            except: return None
         return raw
     except Exception as e:
-        print(f"[cache] load_cached_runs error: {e}", flush=True)
+        print(f"[cache] load_cached_runs error: {e}")
         return None
 
-def save_cached_runs(username: str, runs_data: list) -> bool:
-    """Save serialised runs to cache. Returns True if persisted.
-
-    Important safety rule: never overwrite a good cache with an empty Garmin
-    response. Garmin can return empty data during throttling/session issues, and
-    we do not want the UI to suddenly show 0 runs.
-    """
-    count = len(runs_data or [])
-    if count == 0:
-        print(f"[cache] runs_cache save skipped for {username}: Garmin returned 0 runs", flush=True)
-        return False
-
-    now = datetime.now().isoformat()
+def save_cached_runs(username: str, runs_data: list) -> None:
+    """Save serialised runs to cache."""
     if not USE_DB:
         _file_save_runs_cache(username, runs_data)
-        print(f"[cache] runs_cache file saved for {username}: {count} runs", flush=True)
-        return True
-
+        return
     try:
-        payload = {"username": username, "runs": runs_data, "cached_at": now}
-        existing = _sb_get("runs_cache", f"?username=eq.{username}&select=username")
-        if existing:
-            _sb_patch("runs_cache", {"runs": runs_data, "cached_at": now}, f"?username=eq.{username}")
-        else:
-            _sb_insert("runs_cache", payload)
-        print(f"[cache] runs_cache saved for {username}: {count} runs", flush=True)
-        return True
+        _sb_delete("runs_cache", f"?username=eq.{username}")
+        _sb_insert("runs_cache", {
+            "username": username,
+            "runs": runs_data,  # jsonb — no pre-encoding
+        })
     except Exception as e:
-        print(f"[cache] save_cached_runs error (non-fatal): {e}", flush=True)
-        return False
+        print(f"[cache] save_cached_runs error (non-fatal): {e}")
 
 def invalidate_runs_cache(username: str) -> None:
     """Force next page load to re-fetch from Strava."""
