@@ -443,24 +443,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--c-teal); }
 .steps-summary::-webkit-details-marker { display: none; }
 .steps-details[open] .steps-summary { margin-bottom: 8px; }
 
-
 /* ── 2026 watch-first interface refresh ── */
-.hero-card {
-  background: linear-gradient(135deg, #101f1a 0%, #0f6e56 100%);
-  color: #fff;
-  border-radius: 18px;
-  padding: 1.25rem;
-  margin-bottom: 1rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  box-shadow: 0 14px 34px rgba(15, 110, 86, 0.18);
-}
-.hero-card h1 { font-size: 26px; line-height: 1.1; margin: 3px 0 5px; letter-spacing: -0.03em; }
-.hero-card p { color: rgba(255,255,255,0.76); font-size: 13px; max-width: 420px; }
-.hero-card .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: rgba(255,255,255,0.66); }
-.hero-card .btn { background: #fff; color: #0f6e56; border: 0; white-space: nowrap; }
 .watch-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 1rem; }
 .mini-card { background: var(--c-surface); border: 0.5px solid var(--c-border); border-radius: 14px; padding: 0.9rem; }
 .mini-card .metric-value { font-size: 22px; letter-spacing: -0.02em; }
@@ -472,8 +455,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--c-teal); }
 .btn { border-radius: 999px; font-weight: 600; }
 .btn-sm { padding: 5px 10px; }
 @media (max-width: 560px) {
-  .hero-card { align-items: flex-start; flex-direction: column; }
-  .hero-card .btn { width: 100%; text-align: center; }
   .watch-grid { grid-template-columns: 1fr; }
 }
 

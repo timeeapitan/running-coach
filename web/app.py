@@ -34,6 +34,21 @@ app.secret_key = os.environ.get("SECRET_KEY", "running-coach-dev-key-change-me")
 
 _MODEL_CACHE = {}
 
+# Pre-warm the Garmin session at startup so the first user request is not
+# the one that triggers garth.resume() — reduces cold-start 429 risk.
+def _prewarm_garmin():
+    try:
+        from running_coach.parsers.garmin_connect import _ensure_garth, secret_session_available
+        from web.auth import _GARTH_SESSION_DIR
+        if secret_session_available(_GARTH_SESSION_DIR):
+            _ensure_garth(_GARTH_SESSION_DIR)
+            print("[STARTUP] Garmin session pre-warmed", flush=True)
+    except Exception as e:
+        print(f"[STARTUP] Garmin pre-warm skipped: {e}", flush=True)
+
+with app.app_context():
+    _prewarm_garmin()
+
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
 
@@ -118,17 +133,8 @@ def _finish_garmin_login(email: str, password: str):
     username = email.strip().lower()
     name = username.split("@")[0].replace(".", " ").title()
 
-    try:
-        # Verify that login + activities endpoint works before saving credentials.
-        GarminConnectParser(email, password).fetch_runs(max_runs=5)
-    except Exception as e:
-        import traceback
-        print("GARMIN LOGIN ERROR:", traceback.format_exc(), flush=True)
-        return render_template("login.html",
-            host_credentials=host_credentials_set(),
-            secret_session=secret_session_set(),
-            error=f"Could not connect to Garmin: {e}")
-
+    # Skip upfront verification to avoid rate-limiting the OAuth endpoint.
+    # Credentials are verified on the first dashboard load instead.
     token = {
         "provider": "garmin",
         "email": email,
@@ -237,22 +243,37 @@ def _deserialize_runs(data: list):
             pass
     return runs
 
+# Module-level singleton parsers — created once per process, reused for all requests.
+# This is the key fix for 429 errors: garth.resume() is called only once.
+_PARSER_CACHE: dict = {}
+
 def _get_garmin_parser(uid):
-    token = load_activity_token(uid) or {}
-    from running_coach.parsers.garmin_connect import GarminConnectParser
+    """
+    Return a cached GarminConnectParser. Creating a new instance on every request
+    triggers garth.resume() repeatedly, which causes Garmin 429 rate-limit errors.
+    The singleton pattern ensures the session is established once per process lifetime.
+    """
+    if uid in _PARSER_CACHE:
+        return _PARSER_CACHE[uid]
 
-    # Preferred Render mode: resume saved Garmin session from Secret Files.
-    # This must be checked first so normal page loads never call Garmin login.
-    if GarminConnectParser.secret_session_available():
-        return GarminConnectParser.from_secret_session()
+    from running_coach.parsers.garmin_connect import GarminConnectParser, secret_session_available
 
-    # Local/manual fallback only. This can hit Garmin login limits, so avoid it on Render.
-    email = token.get("email")
-    password = token.get("password")
-    if email and password:
-        return GarminConnectParser(email, password)
+    if secret_session_available():
+        # garth session — _ensure_garth() called once inside the parser
+        parser = GarminConnectParser()
+    else:
+        token    = load_activity_token(uid) or {}
+        email    = token.get("email", "")
+        password = token.get("password", "")
+        if not email or not password:
+            raise RuntimeError(
+                "Missing Garmin session. Upload oauth1_token.json and oauth2_token.json "
+                "as Render Secret Files, or set GARMIN_EMAIL and GARMIN_PASSWORD."
+            )
+        parser = GarminConnectParser(email, password)
 
-    raise RuntimeError("Missing Garmin session. Upload oauth1_token.json and oauth2_token.json as Render Secret Files.")
+    _PARSER_CACHE[uid] = parser
+    return parser
 
 def _load_runs(uid, force=False, auto_fetch=False):
     """Load cached running history and sync Garmin only when needed.
@@ -345,6 +366,19 @@ def _merge_watch_feedback(uid, feedback, force=False, auto_fetch=False):
 
 def _get_coach(uid, profile):
     return RunningCoach(profile, model_dir=_get_model_dir(uid))
+
+def _require_profile(uid):
+    """
+    Load the user profile or redirect to setup.
+    Returns (profile, None) on success, (None, redirect_response) on missing.
+    Usage:
+        profile, redir = _require_profile(uid)
+        if redir: return redir
+    """
+    profile = _get_profile(uid)
+    if not profile:
+        return None, redirect(url_for("setup"))
+    return profile, None
 
 def _fmt_pace(p):
     if not p: return "—"
@@ -477,9 +511,9 @@ def dashboard():
 @app.route("/history")
 @login_required
 def history():
-    uid     = current_user_id()
-    profile = _get_profile(uid)
-    if not profile: return redirect(url_for("setup"))
+    uid              = current_user_id()
+    profile, redir   = _require_profile(uid)
+    if redir: return redir
     runs = _load_runs(uid)
     if not runs:
         return render_template("history.html", profile=profile,
@@ -640,6 +674,15 @@ def refresh_summary():
     summary = build_daily_summary(runs, profile, analysis, rec, feedback)
     save_cached_summary(uid, summary)  # overwrites today's cache
     return redirect(url_for("dashboard"))
+
+
+@app.route("/api/health")
+def api_health():
+    """Lightweight health check for UptimeRobot keep-alive pings.
+    Returns 200 immediately — no DB or Garmin calls.
+    Point UptimeRobot at /api/health every 14 minutes to prevent Render cold starts.
+    """
+    return "", 200
 
 
 @app.route("/api/status")

@@ -6,13 +6,12 @@
 <div class="warning">{{ error }}</div>
 {% endif %}
 
-<div class="hero-card">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;gap:10px;">
   <div>
-    <div class="eyebrow">Today</div>
-    <h1>Your running coach</h1>
-    <p>Fresh recommendation based on your Garmin runs{% if watch_health and (watch_health.sleep_hours or watch_health.hrv_ms) %}, sleep and recovery data{% endif %}.</p>
+    <div style="font-size:12px;color:var(--c-muted);text-transform:uppercase;letter-spacing:0.06em;">Today</div>
+    <div style="font-size:18px;font-weight:700;">Running Coach</div>
   </div>
-  <a href="/refresh" class="btn btn-primary">Sync watch</a>
+  <a href="/refresh" class="btn btn-primary btn-sm">↻ Sync</a>
 </div>
 
 {% if not profile.max_hr or not profile.resting_hr %}
