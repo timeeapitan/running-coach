@@ -190,69 +190,40 @@ class GarminConnectParser:
 
         if secret_session_available(self.session_dir):
             _ensure_garth(self.session_dir)
+            import garth
 
-            # Sleep: try user summary first (often has sleep data)
-            sleep = None
+            # ── User daily summary — single call, contains most health data ──
+            user_summary = None
             try:
-                import garth
-                user_sum = garth.connectapi("/usersummary-service/usersummary/daily", params={"calendarDate": date_str})
-                if isinstance(user_sum, dict) and user_sum.get("sleepingSeconds"):
-                    sleep = user_sum
-                    print(f"[HEALTH] sleep from user_summary: {user_sum.get('sleepingSeconds')}s", flush=True)
+                user_summary = garth.connectapi(
+                    "/usersummary-service/usersummary/daily",
+                    params={"calendarDate": date_str}
+                )
             except Exception as e:
-                print(f"[HEALTH] sleep user_summary error: {e}", flush=True)
+                print(f"[HEALTH] user_summary error: {e}", flush=True)
 
-            if sleep is None:
-                try:
-                    import garth
-                    result = garth.connectapi(f"/sleep-service/sleep/dailySleepData/{date_str}")
-                    if result is not None:
-                        sleep = result
-                except Exception:
-                    pass
+            if isinstance(user_summary, dict):
+                self._apply_sleep(health, user_summary)
+                rhr = self._first_num(user_summary, ["restingHeartRate", "minHeartRate"])
+                if rhr and rhr > 20:
+                    health["resting_hr"] = int(rhr)
+                bb = self._first_num(user_summary, [
+                    "bodyBatteryMostRecentValue", "bodyBatteryHighestValue"
+                ])
+                if bb is not None:
+                    health["body_battery"] = int(bb)
+                stress = self._first_num(user_summary, ["averageStressLevel"])
+                if stress is not None:
+                    health["stress"] = int(stress)
 
-            self._apply_sleep(health, sleep)
-            print(f"[HEALTH] sleep parsed: hours={health.get('sleep_hours')} quality={health.get('sleep_quality')}", flush=True)
-
-            hrv = _garth_get_first([
+            # ── HRV — separate endpoint ──────────────────────────────────────
+            hrv_data = _garth_get_first([
                 f"/hrv-service/hrv/{date_str}",
                 f"/wellness-service/wellness/hrv/{date_str}",
             ])
-            print(f"[HEALTH] hrv raw keys: {list(hrv.keys()) if isinstance(hrv, dict) else type(hrv)}", flush=True)
-            self._apply_hrv(health, hrv)
-            print(f"[HEALTH] hrv parsed: {health.get('hrv_ms')}", flush=True)
+            self._apply_hrv(health, hrv_data)
 
-            # Try user summary endpoint which contains RHR for many account types
-            rhr = None
-            try:
-                import garth
-                # The user summary endpoint often works when wellness endpoints don't
-                user_summary = garth.connectapi("/usersummary-service/usersummary/daily", params={"calendarDate": date_str})
-                if isinstance(user_summary, dict):
-                    print(f"[HEALTH] user_summary keys: {list(user_summary.keys())}", flush=True)
-                    rhr_val = self._first_num(user_summary, [
-                        "restingHeartRate", "minHeartRate", "averageRestingHeartRate"
-                    ])
-                    if rhr_val:
-                        health["resting_hr"] = int(rhr_val)
-                        print(f"[HEALTH] rhr from user_summary: {rhr_val}", flush=True)
-            except Exception as e:
-                print(f"[HEALTH] user_summary error: {e}", flush=True)
-            print(f"[HEALTH] rhr parsed: {health.get('resting_hr')}", flush=True)
-
-            bb = _garth_get_first([
-                f"/wellness-service/wellness/bodyBattery/reports/daily/{date_str}",
-                f"/wellness-service/wellness/bodyBattery/{date_str}",
-            ])
-            health["body_battery"] = self._extract_numeric(
-                bb, ["bodyBatteryValue", "bodyBattery", "value", "charged", "drained"]
-            )
-
-            stress = _garth_get_first([
-                f"/wellness-service/wellness/dailyStress/{date_str}",
-                f"/wellness-service/wellness/stress/{date_str}",
-            ])
-            self._apply_stress(health, stress)
+            print(f"[HEALTH] fetched: sleep={health.get('sleep_hours')}h rhr={health.get('resting_hr')} hrv={health.get('hrv_ms')} bb={health.get('body_battery')} stress={health.get('stress')}", flush=True)
 
         else:
             client = self._gc_client_get()
@@ -373,34 +344,29 @@ class GarminConnectParser:
     def _apply_sleep(self, health: dict, data: Any) -> None:
         if not isinstance(data, dict):
             return
-        # sleepingSeconds from user summary endpoint
-        sleeping_secs = self._first_num(data, ["sleepingSeconds"])
-        if sleeping_secs and sleeping_secs > 0:
-            health["sleep_hours"] = round(sleeping_secs / 3600, 1)
-            return
-        # Check inside dailySleepDTO if present
-        inner = data.get("dailySleepDTO") if isinstance(data.get("dailySleepDTO"), dict) else data
-        secs = self._first_num(inner, [
-            "sleepTimeSeconds", "totalSleepSeconds", "sleepDurationSeconds",
-            "unmeasurableSleepSeconds",
+        # Prefer measurableAsleepDuration (actual sleep, excludes awake time in bed)
+        # sleepingSeconds includes time in bed — less accurate
+        secs = self._first_num(data, [
+            "measurableAsleepDuration",   # most accurate — excludes awake periods
+            "sleepTimeSeconds",            # from sleep service if available
+            "totalSleepSeconds",
         ])
-        # Also sum deep + light + rem if individual stages available
+        # Fallback: sleepingSeconds minus awake time
         if secs is None:
-            deep  = self._first_num(inner, ["deepSleepSeconds", "deepSleepDuration"]) or 0
-            light = self._first_num(inner, ["lightSleepSeconds", "lightSleepDuration"]) or 0
-            rem   = self._first_num(inner, ["remSleepSeconds", "remSleepDuration"]) or 0
-            total = deep + light + rem
-            if total > 0:
-                secs = total
-        if secs and secs > 0:
+            sleeping = self._first_num(data, ["sleepingSeconds"])
+            awake    = self._first_num(data, ["measurableAwakeDuration"]) or 0
+            if sleeping:
+                secs = max(0, sleeping - awake)
+        # Last resort: sum sleep stages
+        if secs is None:
+            inner = data.get("dailySleepDTO") if isinstance(data.get("dailySleepDTO"), dict) else data
+            deep  = self._first_num(inner, ["deepSleepSeconds"]) or 0
+            light = self._first_num(inner, ["lightSleepSeconds"]) or 0
+            rem   = self._first_num(inner, ["remSleepSeconds"])   or 0
+            if deep + light + rem > 0:
+                secs = deep + light + rem
+        if secs and secs > 3600:  # sanity: at least 1 hour
             health["sleep_hours"] = round(secs / 3600, 1)
-        # Score
-        score_data = inner.get("sleepScores") if isinstance(inner.get("sleepScores"), dict) else inner
-        score = self._first_num(score_data, ["overallScore", "qualityTypePK", "totalScore"])
-        if score is None:
-            score = self._first_num(inner, ["sleepScores", "overallScore", "qualityTypePK"])
-        if score:
-            health["sleep_quality"] = max(1, min(5, round(score / 20)))
 
     def _apply_hrv(self, health: dict, data: Any) -> None:
         if not isinstance(data, dict):
