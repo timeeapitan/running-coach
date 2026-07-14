@@ -191,26 +191,26 @@ class GarminConnectParser:
         if secret_session_available(self.session_dir):
             _ensure_garth(self.session_dir)
 
-            sleep_paths = [
-                f"/wellness-service/wellness/dailySleepData/{date_str}",
-                f"/sleep-service/sleep/dailySleepData/{date_str}",
-                f"/sleep-service/sleep/{date_str}",
-                f"/wellness-service/wellness/sleep/{date_str}",
-                f"/wellness-service/wellness/dailySummaryChart/{date_str}",
-            ]
+            # Sleep: try user summary first (often has sleep data)
             sleep = None
-            for sp in sleep_paths:
+            try:
+                import garth
+                user_sum = garth.connectapi("/usersummary-service/usersummary/daily", params={"calendarDate": date_str})
+                if isinstance(user_sum, dict) and user_sum.get("sleepingSeconds"):
+                    sleep = user_sum
+                    print(f"[HEALTH] sleep from user_summary: {user_sum.get('sleepingSeconds')}s", flush=True)
+            except Exception as e:
+                print(f"[HEALTH] sleep user_summary error: {e}", flush=True)
+
+            if sleep is None:
                 try:
                     import garth
-                    result = garth.connectapi(sp)
+                    result = garth.connectapi(f"/sleep-service/sleep/dailySleepData/{date_str}")
                     if result is not None:
-                        print(f"[HEALTH] sleep found at {sp}: keys={list(result.keys()) if isinstance(result, dict) else type(result)}", flush=True)
                         sleep = result
-                        break
-                    else:
-                        print(f"[HEALTH] sleep {sp} = None", flush=True)
-                except Exception as e:
-                    print(f"[HEALTH] sleep {sp} error: {e}", flush=True)
+                except Exception:
+                    pass
+
             self._apply_sleep(health, sleep)
             print(f"[HEALTH] sleep parsed: hours={health.get('sleep_hours')} quality={health.get('sleep_quality')}", flush=True)
 
@@ -222,27 +222,22 @@ class GarminConnectParser:
             self._apply_hrv(health, hrv)
             print(f"[HEALTH] hrv parsed: {health.get('hrv_ms')}", flush=True)
 
-            rhr_paths = [
-                f"/wellness-service/wellness/dailyHeartRate/{date_str}",
-                f"/wellness-service/wellness/rhr/{date_str}",
-                f"/userstats-service/wellness/daily/{date_str}",
-                f"/wellness-service/wellness/dailySummary/{date_str}",
-                f"/wellness-service/wellness/heartRate/{date_str}",
-            ]
+            # Try user summary endpoint which contains RHR for many account types
             rhr = None
-            for rp in rhr_paths:
-                try:
-                    import garth
-                    result = garth.connectapi(rp)
-                    if result is not None:
-                        print(f"[HEALTH] rhr found at {rp}: keys={list(result.keys()) if isinstance(result, dict) else type(result)}", flush=True)
-                        rhr = result
-                        break
-                    else:
-                        print(f"[HEALTH] rhr {rp} = None", flush=True)
-                except Exception as e:
-                    print(f"[HEALTH] rhr {rp} error: {e}", flush=True)
-            self._apply_resting_hr(health, rhr)
+            try:
+                import garth
+                # The user summary endpoint often works when wellness endpoints don't
+                user_summary = garth.connectapi("/usersummary-service/usersummary/daily", params={"calendarDate": date_str})
+                if isinstance(user_summary, dict):
+                    print(f"[HEALTH] user_summary keys: {list(user_summary.keys())}", flush=True)
+                    rhr_val = self._first_num(user_summary, [
+                        "restingHeartRate", "minHeartRate", "averageRestingHeartRate"
+                    ])
+                    if rhr_val:
+                        health["resting_hr"] = int(rhr_val)
+                        print(f"[HEALTH] rhr from user_summary: {rhr_val}", flush=True)
+            except Exception as e:
+                print(f"[HEALTH] user_summary error: {e}", flush=True)
             print(f"[HEALTH] rhr parsed: {health.get('resting_hr')}", flush=True)
 
             bb = _garth_get_first([
@@ -378,6 +373,11 @@ class GarminConnectParser:
     def _apply_sleep(self, health: dict, data: Any) -> None:
         if not isinstance(data, dict):
             return
+        # sleepingSeconds from user summary endpoint
+        sleeping_secs = self._first_num(data, ["sleepingSeconds"])
+        if sleeping_secs and sleeping_secs > 0:
+            health["sleep_hours"] = round(sleeping_secs / 3600, 1)
+            return
         # Check inside dailySleepDTO if present
         inner = data.get("dailySleepDTO") if isinstance(data.get("dailySleepDTO"), dict) else data
         secs = self._first_num(inner, [
@@ -428,6 +428,16 @@ class GarminConnectParser:
                 hrv = round(sum(vals) / len(vals), 1)
         if hrv:
             health["hrv_ms"] = round(hrv, 1)
+
+        # HRV response also contains sleep timestamps — derive sleep duration
+        if health.get("sleep_hours") is None:
+            start = self._first_num(data, ["sleepStartTimestampGMT", "sleepStartTimestampLocal"])
+            end   = self._first_num(data, ["sleepEndTimestampGMT", "sleepEndTimestampLocal"])
+            if start and end and end > start:
+                sleep_secs = (end - start) / 1000  # timestamps are in ms
+                if 3600 < sleep_secs < 86400:  # sanity: between 1h and 24h
+                    health["sleep_hours"] = round(sleep_secs / 3600, 1)
+                    print(f"[HEALTH] sleep derived from HRV timestamps: {health['sleep_hours']}h", flush=True)
 
     def _apply_resting_hr(self, health: dict, data: Any) -> None:
         if not isinstance(data, dict):
