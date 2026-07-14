@@ -195,19 +195,25 @@ class GarminConnectParser:
                 f"/wellness-service/wellness/dailySleepData/{date_str}",
                 f"/sleep-service/sleep/dailySleepData/{date_str}",
             ])
+            print(f"[HEALTH] sleep raw keys: {list(sleep.keys()) if isinstance(sleep, dict) else type(sleep)}", flush=True)
             self._apply_sleep(health, sleep)
+            print(f"[HEALTH] sleep parsed: hours={health.get('sleep_hours')} quality={health.get('sleep_quality')}", flush=True)
 
             hrv = _garth_get_first([
                 f"/hrv-service/hrv/{date_str}",
                 f"/wellness-service/wellness/hrv/{date_str}",
             ])
+            print(f"[HEALTH] hrv raw keys: {list(hrv.keys()) if isinstance(hrv, dict) else type(hrv)}", flush=True)
             self._apply_hrv(health, hrv)
+            print(f"[HEALTH] hrv parsed: {health.get('hrv_ms')}", flush=True)
 
             rhr = _garth_get_first([
                 f"/wellness-service/wellness/dailyHeartRate/{date_str}",
                 f"/wellness-service/wellness/rhr/{date_str}",
             ])
+            print(f"[HEALTH] rhr raw keys: {list(rhr.keys()) if isinstance(rhr, dict) else type(rhr)}", flush=True)
             self._apply_resting_hr(health, rhr)
+            print(f"[HEALTH] rhr parsed: {health.get('resting_hr')}", flush=True)
 
             bb = _garth_get_first([
                 f"/wellness-service/wellness/bodyBattery/reports/daily/{date_str}",
