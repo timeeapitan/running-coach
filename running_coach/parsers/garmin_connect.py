@@ -191,13 +191,26 @@ class GarminConnectParser:
         if secret_session_available(self.session_dir):
             _ensure_garth(self.session_dir)
 
-            sleep = _garth_get_first([
+            sleep_paths = [
                 f"/wellness-service/wellness/dailySleepData/{date_str}",
                 f"/sleep-service/sleep/dailySleepData/{date_str}",
                 f"/sleep-service/sleep/{date_str}",
                 f"/wellness-service/wellness/sleep/{date_str}",
-            ])
-            print(f"[HEALTH] sleep raw keys: {list(sleep.keys()) if isinstance(sleep, dict) else type(sleep)}", flush=True)
+                f"/wellness-service/wellness/dailySummaryChart/{date_str}",
+            ]
+            sleep = None
+            for sp in sleep_paths:
+                try:
+                    import garth
+                    result = garth.connectapi(sp)
+                    if result is not None:
+                        print(f"[HEALTH] sleep found at {sp}: keys={list(result.keys()) if isinstance(result, dict) else type(result)}", flush=True)
+                        sleep = result
+                        break
+                    else:
+                        print(f"[HEALTH] sleep {sp} = None", flush=True)
+                except Exception as e:
+                    print(f"[HEALTH] sleep {sp} error: {e}", flush=True)
             self._apply_sleep(health, sleep)
             print(f"[HEALTH] sleep parsed: hours={health.get('sleep_hours')} quality={health.get('sleep_quality')}", flush=True)
 
@@ -209,13 +222,26 @@ class GarminConnectParser:
             self._apply_hrv(health, hrv)
             print(f"[HEALTH] hrv parsed: {health.get('hrv_ms')}", flush=True)
 
-            rhr = _garth_get_first([
+            rhr_paths = [
                 f"/wellness-service/wellness/dailyHeartRate/{date_str}",
                 f"/wellness-service/wellness/rhr/{date_str}",
                 f"/userstats-service/wellness/daily/{date_str}",
                 f"/wellness-service/wellness/dailySummary/{date_str}",
-            ])
-            print(f"[HEALTH] rhr raw keys: {list(rhr.keys()) if isinstance(rhr, dict) else type(rhr)}", flush=True)
+                f"/wellness-service/wellness/heartRate/{date_str}",
+            ]
+            rhr = None
+            for rp in rhr_paths:
+                try:
+                    import garth
+                    result = garth.connectapi(rp)
+                    if result is not None:
+                        print(f"[HEALTH] rhr found at {rp}: keys={list(result.keys()) if isinstance(result, dict) else type(result)}", flush=True)
+                        rhr = result
+                        break
+                    else:
+                        print(f"[HEALTH] rhr {rp} = None", flush=True)
+                except Exception as e:
+                    print(f"[HEALTH] rhr {rp} error: {e}", flush=True)
             self._apply_resting_hr(health, rhr)
             print(f"[HEALTH] rhr parsed: {health.get('resting_hr')}", flush=True)
 
