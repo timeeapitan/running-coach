@@ -464,6 +464,12 @@ def dashboard():
 
     # No runs yet — still show a profile-based recommendation using rules engine
     is_new_user = len(runs) == 0
+    sync_rate_limited = False
+    if not runs and not is_new_user:
+        # Runs were expected but returned empty — likely a rate limit, not truly new user
+        from web.db import load_cached_runs as _lcr
+        if _lcr(uid):
+            sync_rate_limited = True  # cache has data but fetch failed
 
     if len(runs) >= 10 and not coach.trainer.fatigue_predictor.is_trained:
         coach.train_models(runs)
@@ -653,7 +659,7 @@ def refresh_summary():
     if last_sync_text and request.args.get("force") != "1":
         try:
             last_sync = datetime.fromisoformat(str(last_sync_text).replace("Z", "+00:00")).replace(tzinfo=None)
-            if datetime.now() - last_sync < timedelta(minutes=30):
+            if datetime.now() - last_sync < timedelta(minutes=60):
                 print("[GARMIN SYNC] skipped: refreshed less than 30 minutes ago", flush=True)
                 return redirect(url_for("dashboard"))
         except Exception:

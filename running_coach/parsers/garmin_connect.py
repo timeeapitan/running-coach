@@ -81,7 +81,7 @@ def _ensure_garth(session_dir: str = DEFAULT_SESSION_DIR) -> None:
         except Exception as exc:
             msg = str(exc)
             if "429" in msg and attempt < 2:
-                wait = 30 * (attempt + 1)
+                wait = 60 * (attempt + 1)  # 60s, 120s
                 print(f"[GARMIN] 429 on session resume — waiting {wait}s (attempt {attempt+1}/3)", flush=True)
                 import time; time.sleep(wait)
             else:
@@ -116,7 +116,7 @@ def _garth_get(path: str, params: dict = None, retries: int = 2) -> Any:
         except Exception as exc:
             msg = str(exc)
             if "429" in msg:
-                wait = 45 * (attempt + 1)
+                wait = 120 * (attempt + 1)  # 120s, 240s, 360s
                 print(f"[GARMIN] 429 on {path} — waiting {wait}s (attempt {attempt+1}/{retries+1})", flush=True)
                 time.sleep(wait)
                 last_exc = exc
