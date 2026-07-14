@@ -194,6 +194,8 @@ class GarminConnectParser:
             sleep = _garth_get_first([
                 f"/wellness-service/wellness/dailySleepData/{date_str}",
                 f"/sleep-service/sleep/dailySleepData/{date_str}",
+                f"/sleep-service/sleep/{date_str}",
+                f"/wellness-service/wellness/sleep/{date_str}",
             ])
             print(f"[HEALTH] sleep raw keys: {list(sleep.keys()) if isinstance(sleep, dict) else type(sleep)}", flush=True)
             self._apply_sleep(health, sleep)
@@ -210,6 +212,8 @@ class GarminConnectParser:
             rhr = _garth_get_first([
                 f"/wellness-service/wellness/dailyHeartRate/{date_str}",
                 f"/wellness-service/wellness/rhr/{date_str}",
+                f"/userstats-service/wellness/daily/{date_str}",
+                f"/wellness-service/wellness/dailySummary/{date_str}",
             ])
             print(f"[HEALTH] rhr raw keys: {list(rhr.keys()) if isinstance(rhr, dict) else type(rhr)}", flush=True)
             self._apply_resting_hr(health, rhr)
@@ -348,22 +352,54 @@ class GarminConnectParser:
     def _apply_sleep(self, health: dict, data: Any) -> None:
         if not isinstance(data, dict):
             return
-        secs = self._first_num(data, [
+        # Check inside dailySleepDTO if present
+        inner = data.get("dailySleepDTO") if isinstance(data.get("dailySleepDTO"), dict) else data
+        secs = self._first_num(inner, [
             "sleepTimeSeconds", "totalSleepSeconds", "sleepDurationSeconds",
-            "slightlyAwakeSeconds",
+            "unmeasurableSleepSeconds",
         ])
-        if secs:
+        # Also sum deep + light + rem if individual stages available
+        if secs is None:
+            deep  = self._first_num(inner, ["deepSleepSeconds", "deepSleepDuration"]) or 0
+            light = self._first_num(inner, ["lightSleepSeconds", "lightSleepDuration"]) or 0
+            rem   = self._first_num(inner, ["remSleepSeconds", "remSleepDuration"]) or 0
+            total = deep + light + rem
+            if total > 0:
+                secs = total
+        if secs and secs > 0:
             health["sleep_hours"] = round(secs / 3600, 1)
-        score = self._first_num(data, ["sleepScores", "overallScore", "qualityTypePK"])
+        # Score
+        score_data = inner.get("sleepScores") if isinstance(inner.get("sleepScores"), dict) else inner
+        score = self._first_num(score_data, ["overallScore", "qualityTypePK", "totalScore"])
+        if score is None:
+            score = self._first_num(inner, ["sleepScores", "overallScore", "qualityTypePK"])
         if score:
             health["sleep_quality"] = max(1, min(5, round(score / 20)))
 
     def _apply_hrv(self, health: dict, data: Any) -> None:
         if not isinstance(data, dict):
             return
+        # Try top-level fields first
         hrv = self._first_num(data, [
             "lastNight", "hrvValue", "rmssd", "averageHRV", "weeklyAvg",
         ])
+        # Garmin API returns hrvSummary as a nested dict
+        if hrv is None and isinstance(data.get("hrvSummary"), dict):
+            hrv = self._first_num(data["hrvSummary"], [
+                "lastNight", "hrvValue", "rmssd", "averageHRV", "weeklyAvg",
+                "lastNight5MinHigh", "baseline", "balancedLow", "balancedUpper",
+            ])
+        # Also check hrvReadings list for average
+        if hrv is None and isinstance(data.get("hrvReadings"), list):
+            readings = data["hrvReadings"]
+            vals = []
+            for r in readings:
+                if isinstance(r, dict):
+                    v = self._first_num(r, ["hrvValue", "rmssd", "value"])
+                    if v:
+                        vals.append(v)
+            if vals:
+                hrv = round(sum(vals) / len(vals), 1)
         if hrv:
             health["hrv_ms"] = round(hrv, 1)
 
@@ -372,8 +408,15 @@ class GarminConnectParser:
             return
         rhr = self._first_num(data, [
             "restingHeartRate", "rhr", "averageRestingHeartRate",
+            "restingHeartRateValue", "minHeartRate", "lowestHeartRate",
+            "calendarDate",  # skip this one — just checking structure
         ])
-        if rhr:
+        # Also check inside heartRateValues list
+        if rhr is None and isinstance(data.get("heartRateValues"), list):
+            vals = [v[1] for v in data["heartRateValues"] if isinstance(v, list) and len(v) > 1 and v[1]]
+            if vals:
+                rhr = min(vals)  # resting HR is typically the minimum
+        if rhr and rhr > 20:  # sanity check
             health["resting_hr"] = int(rhr)
 
     def _apply_stress(self, health: dict, data: Any) -> None:
