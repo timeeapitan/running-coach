@@ -325,13 +325,21 @@ def _load_watch_health(uid, date_obj=None, force=False, auto_fetch=False):
     if cached is None and not force and not auto_fetch:
         return {}
 
+    # Check global rate limit before health fetch
+    if not force and _garmin_is_rate_limited():
+        print("[GARMIN HEALTH] rate limited — serving cache", flush=True)
+        return cached or {}
+
     try:
         watch = _get_garmin_parser(uid).fetch_daily_health(date_obj) or {}
         if watch:
             save_cached_watch_health(uid, date_str, watch)
         return watch
     except Exception as e:
-        print("[GARMIN HEALTH] unavailable:", repr(e), flush=True)
+        err_str = repr(e)
+        print("[GARMIN HEALTH] unavailable:", err_str, flush=True)
+        if "429" in err_str:
+            _garmin_set_rate_limited()
         try:
             mark_sync_failed(uid, str(e), date_str)
         except Exception:
