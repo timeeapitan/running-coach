@@ -34,6 +34,28 @@ app.secret_key = os.environ.get("SECRET_KEY", "running-coach-dev-key-change-me")
 
 _MODEL_CACHE = {}
 
+# Global Garmin rate limit tracker
+_GARMIN_RATE_LIMITED_UNTIL = None
+_GARMIN_RATE_LIMIT_SECONDS = 300  # 5 min backoff after any 429
+
+def _garmin_is_rate_limited() -> bool:
+    global _GARMIN_RATE_LIMITED_UNTIL
+    if _GARMIN_RATE_LIMITED_UNTIL is None:
+        return False
+    if datetime.now() < _GARMIN_RATE_LIMITED_UNTIL:
+        remaining = int((_GARMIN_RATE_LIMITED_UNTIL - datetime.now()).total_seconds())
+        print(f"[GARMIN] rate limited — {remaining}s remaining", flush=True)
+        return True
+    _GARMIN_RATE_LIMITED_UNTIL = None
+    return False
+
+def _garmin_set_rate_limited():
+    global _GARMIN_RATE_LIMITED_UNTIL
+    from datetime import timedelta
+    _GARMIN_RATE_LIMITED_UNTIL = datetime.now() + timedelta(seconds=_GARMIN_RATE_LIMIT_SECONDS)
+    print(f"[GARMIN] rate limit set until {_GARMIN_RATE_LIMITED_UNTIL.strftime('%H:%M:%S')}", flush=True)
+
+
 # Pre-warm the Garmin session at startup so the first user request is not
 # the one that triggers garth.resume() — reduces cold-start 429 risk.
 def _prewarm_garmin():
