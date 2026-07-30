@@ -23,6 +23,15 @@
 </div>
 {% endif %}
 
+{% if not runs and not is_new_user %}
+<div style="background:var(--c-amber-bg);border-left:3px solid #ef9f27;border-radius:0 var(--radius) var(--radius) 0;padding:0.85rem 1rem;margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+  <span style="font-size:13px;color:var(--c-amber);">Tap Sync to fetch your latest activities from Garmin.</span>
+  <a href="/refresh" class="btn btn-sm" style="background:#ef9f27;color:#fff;white-space:nowrap;flex-shrink:0;"
+     data-sync-available="{{ sync_available|lower }}"
+     data-sync-wait-message="{{ sync_wait_message or '' }}">↻ Sync now</a>
+</div>
+{% endif %}
+
 {% if is_new_user %}
 <div style="background:var(--c-teal-bg);border-left:3px solid var(--c-teal);border-radius:0 var(--radius) var(--radius) 0;padding:1rem 1.1rem;margin-bottom:1rem;">
   <div style="font-size:16px;font-weight:600;color:var(--c-teal);margin-bottom:4px;">Welcome! No Garmin runs found yet.</div>
