@@ -11,7 +11,7 @@
     <div style="font-size:12px;color:var(--c-muted);text-transform:uppercase;letter-spacing:0.06em;">Today</div>
     <div style="font-size:18px;font-weight:700;">Running Coach</div>
   </div>
-  <a href="/refresh" class="btn btn-primary btn-sm">↻ Sync</a>
+  <a href="/refresh" class="btn btn-primary btn-sm" data-sync-available="{{ sync_available|lower }}" data-sync-wait-message="{{ sync_wait_message or  }}">↻ Sync</a>
 </div>
 
 {% if not profile.max_hr or not profile.resting_hr %}
@@ -116,7 +116,7 @@
   </div>
   {% endif %}
 
-  <a href="/refresh" class="btn btn-secondary btn-sm" style="display:inline-block;margin-top:10px;font-size:13px;">↻ Recalculate after a new run</a>
+  <a href="/refresh" class="btn btn-secondary btn-sm" style="display:inline-block;margin-top:10px;font-size:13px;" data-sync-available="{{ sync_available|lower }}" data-sync-wait-message="{{ sync_wait_message or  }}">↻ Recalculate after a new run</a>
 </div>
 {% endif %}
 

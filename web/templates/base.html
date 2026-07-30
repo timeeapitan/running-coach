@@ -45,6 +45,16 @@
   </div>
 </div>
 <script>
+  // Hide overlay immediately on any page load/restore — including Safari bfcache restores.
+  // pageshow fires on normal loads AND when Safari restores a page from back-forward cache.
+  window.addEventListener("pageshow", function(e) {
+    var overlay = document.getElementById("syncOverlay");
+    if (overlay) {
+      overlay.classList.remove("is-visible");
+      overlay.setAttribute("aria-hidden", "true");
+    }
+  });
+
   document.addEventListener("DOMContentLoaded", function () {
     var overlay = document.getElementById("syncOverlay");
     if (!overlay) return;
@@ -59,15 +69,29 @@
       overlay.setAttribute("aria-hidden", "false");
     }
 
-      // Only show overlay for sync/refresh actions — not regular navigation
+      // Sync buttons — use server-rendered sync availability (no async call needed)
     var syncLinks = document.querySelectorAll('a[href="/refresh"], a[href^="/refresh?"]');
     syncLinks.forEach(function(link) {
-      function triggerOverlay() {
-        showOverlay("Syncing your watch data", "Fetching your latest activities from Garmin. This usually takes 5–15 seconds.");
-        startProgressMessages();
+      var syncAvailable = link.dataset.syncAvailable === "true";
+      var syncWaitMsg   = link.dataset.syncWaitMessage || "";
 
-        // Safety timeout — if page hasn't reloaded after 90 seconds something went wrong
-        // Hide the overlay so the user isn't stuck
+      var tapped = false;
+      function handleSyncTap(e) {
+        if (tapped) return;  // prevent double-fire from touchstart+click
+        tapped = true;
+        e.preventDefault();
+
+        if (!syncAvailable && syncWaitMsg) {
+          // In cooldown — show banner immediately, no overlay, no navigation
+          showSyncCooldownBanner(syncWaitMsg);
+          setTimeout(function() { tapped = false; }, 1000);
+          return;
+        }
+
+        // Sync available — show overlay and navigate
+        showOverlay("Syncing your watch data",
+          "Fetching your latest activities from Garmin. This usually takes 5–15 seconds.");
+        startProgressMessages();
         setTimeout(function() {
           if (overlay && overlay.classList.contains("is-visible")) {
             overlay.classList.remove("is-visible");
@@ -75,14 +99,45 @@
             showToast("Sync is taking longer than expected. Try again in a moment.");
           }
         }, 90000);
+        window.location.href = link.getAttribute("href");
       }
-      link.addEventListener("touchstart", function() {
-        triggerOverlay();
-      }, { passive: true });
-      link.addEventListener("click", function() {
-        triggerOverlay();
-      });
+
+      link.addEventListener("touchstart", handleSyncTap, { passive: false });
+      link.addEventListener("click", handleSyncTap);
     });
+
+    // Dismissible sync cooldown banner
+    function showSyncCooldownBanner(msg) {
+      // Remove any existing banner
+      var existing = document.getElementById("syncCooldownBanner");
+      if (existing) existing.remove();
+
+      var banner = document.createElement("div");
+      banner.id = "syncCooldownBanner";
+      banner.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:10000;" +
+        "background:#1a1a18;color:#fff;font-size:13px;padding:14px 48px 14px 16px;" +
+        "text-align:center;line-height:1.4;box-shadow:0 2px 12px rgba(0,0,0,0.2);";
+      banner.textContent = msg;
+
+      // Dismiss button
+      var close = document.createElement("button");
+      close.textContent = "✕";
+      close.style.cssText = "position:absolute;right:14px;top:50%;transform:translateY(-50%);" +
+        "background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:4px 8px;";
+      close.onclick = function() { banner.remove(); };
+      banner.appendChild(close);
+
+      document.body.appendChild(banner);
+
+      // Auto-dismiss after 6 seconds
+      setTimeout(function() {
+        if (document.getElementById("syncCooldownBanner")) {
+          banner.style.transition = "opacity 0.4s";
+          banner.style.opacity = "0";
+          setTimeout(function() { banner.remove(); }, 400);
+        }
+      }, 6000);
+    }
 
     // Reusable toast notification
     function showToast(msg) {

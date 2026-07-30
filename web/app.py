@@ -494,6 +494,23 @@ def dashboard():
     coach    = _get_coach(uid, profile)
     schedule = load_schedule(uid)
 
+    # Pre-compute sync availability for the template
+    # so the JS knows instantly without an extra API call
+    sync_available = True
+    sync_wait_message = None
+    try:
+        raw_cache = load_cached_summary(uid) or {}
+        last_sync_text = raw_cache.get("health_cached_at") or raw_cache.get("summary_cached_at")
+        if last_sync_text:
+            last_sync_dt = datetime.fromisoformat(str(last_sync_text).replace("Z", "+00:00")).replace(tzinfo=None)
+            diff_minutes = int((datetime.now() - last_sync_dt).total_seconds() / 60)
+            if diff_minutes < 60:
+                sync_available = False
+                remaining = 60 - diff_minutes
+                sync_wait_message = f"Already synced {diff_minutes} minute{'s' if diff_minutes != 1 else ''} ago. Next sync available in {remaining} minute{'s' if remaining != 1 else ''}."
+    except Exception:
+        pass
+
     # No runs yet — still show a profile-based recommendation using rules engine
     is_new_user = len(runs) == 0
     sync_rate_limited = False
@@ -576,6 +593,8 @@ def dashboard():
         planned_rec=planned_rec,
         today_planned=planned_type,
         schedule=schedule,
+        sync_available=sync_available,
+        sync_wait_message=sync_wait_message,
         user_name=current_user_name(), user_avatar=current_user_avatar())
 
 
@@ -777,6 +796,31 @@ def schedule():
         user_name=current_user_name(),
         user_avatar=current_user_avatar(),
     )
+
+
+@app.route("/api/sync-status")
+@login_required
+def api_sync_status():
+    """Returns whether a sync is available or still in cooldown."""
+    uid = current_user_id()
+    try:
+        from web.db import load_cached_summary
+        raw_cache = load_cached_summary(uid) or {}
+        last_sync_text = raw_cache.get("health_cached_at") or raw_cache.get("summary_cached_at")
+        if last_sync_text:
+            last_sync = datetime.fromisoformat(str(last_sync_text).replace("Z", "+00:00")).replace(tzinfo=None)
+            diff_minutes = int((datetime.now() - last_sync).total_seconds() / 60)
+            if diff_minutes < 60:
+                remaining = 60 - diff_minutes
+                return jsonify({
+                    "can_sync": False,
+                    "minutes_ago": diff_minutes,
+                    "wait_minutes": remaining,
+                    "message": f"Already synced {diff_minutes} minute{'s' if diff_minutes != 1 else ''} ago. Next sync available in {remaining} minute{'s' if remaining != 1 else ''}.",
+                })
+    except Exception:
+        pass
+    return jsonify({"can_sync": True})
 
 
 @app.route("/api/health")
