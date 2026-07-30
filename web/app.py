@@ -591,6 +591,8 @@ def dashboard():
             rationale="You planned a rest day for today.",
             steps=[{"label": "Rest", "detail": "No run today — scheduled rest."}],
         )
+        # Override rec with rest too — don't show contradictory coach advice
+        rec = planned_rec
 
     return render_template("dashboard.html",
         profile=profile, analysis=analysis, recommendation=rec,

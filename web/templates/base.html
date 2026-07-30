@@ -20,6 +20,10 @@
       {% endif %}
       <span class="nav-user-name">{{ user_name }}</span>
       <a href="/setup" class="nav-icon-btn" title="Settings">⚙</a>
+      <a href="/refresh" class="btn btn-primary btn-sm"
+         style="padding:5px 12px;font-size:13px;flex-shrink:0;"
+         data-sync-available="{{ sync_available|lower if sync_available is defined else 'true' }}"
+         data-sync-wait-message="{{ sync_wait_message or '' if sync_wait_message is defined else '' }}">↻ Sync</a>
       <a href="/logout" class="nav-signout">Sign out</a>
     </div>
   </div>

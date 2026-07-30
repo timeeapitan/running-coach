@@ -124,10 +124,20 @@
     {% endif %}
   </div>
 </div>
+{# Only show coach adjustment if it differs from plan — never override a rest day #}
+{% if today_planned != 'rest' %}
 <div style="font-size:11px;font-weight:600;color:var(--c-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">🤖 Coach adjustment</div>
 {% endif %}
+{% endif %}
 
-{# ── TODAY'S RECOMMENDATION ─────────────────────────────────────────────────── #}
+{# If today is a planned rest day, skip the coach recommendation entirely #}
+{% if today_planned == 'rest' %}
+{# already shown the rest card above — nothing more needed #}
+{% set _skip_rec = true %}
+{% endif %}
+
+{# ── TODAY'S RECOMMENDATION — skip if rest day was planned ─────────────────── #}
+{% if today_planned != 'rest' or not planned_rec %}
 <div class="rec-box">
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
     <span style="font-size:20px;font-weight:700;">{{ recommendation.description }}</span>
@@ -215,6 +225,7 @@
   {% endif %}
   {% endif %}{# not rest #}
 </div>
+{% endif %}{# skip if rest #}
 
 {# ── STATUS SCORES ──────────────────────────────────────────────────────────── #}
 <div class="card">
