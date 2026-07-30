@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Log feedback — Running Coach{% endblock %}
+{% block content %}
+
+<p style="font-size:13px;color:var(--c-muted);margin-bottom:1.25rem;">Sleep and HRV are filled from your watch when available. Use this page mainly for mood, RPE, pain or notes.</p>
+
+{% if watch_health %}
+<div class="watch-grid">
+  <div class="mini-card"><div class="metric-label">Sleep</div><div class="metric-value">{% if watch_health.sleep_hours %}{{ watch_health.sleep_hours }}h{% else %}—{% endif %}</div></div>
+  <div class="mini-card"><div class="metric-label">HRV</div><div class="metric-value">{% if watch_health.hrv_ms %}{{ watch_health.hrv_ms|round|int }} ms{% else %}—{% endif %}</div></div>
+  <div class="mini-card"><div class="metric-label">Resting HR</div><div class="metric-value">{% if watch_health.resting_hr %}{{ watch_health.resting_hr|round|int }} bpm{% else %}—{% endif %}</div></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <form method="POST" action="/log">
+    <div class="form-group">
+      <label>Date</label>
+      <input type="date" name="date" value="{{ today }}">
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>RPE — how hard was the run? (1–10)</label>
+        <input type="number" name="rpe" min="1" max="10" placeholder="e.g. 6">
+      </div>
+      <div class="form-group">
+        <label>Mood (1 = terrible, 5 = great)</label>
+        <input type="number" name="mood" min="1" max="5" placeholder="e.g. 4">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Sleep hours last night (auto-filled if available)</label>
+        <input type="number" name="sleep_hours" step="0.5" min="0" max="24" placeholder="e.g. 7.5">
+      </div>
+      <div class="form-group">
+        <label>Sleep quality (1–5, auto-filled if available)</label>
+        <input type="number" name="sleep_quality" min="1" max="5" placeholder="e.g. 4">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>HRV this morning (ms, auto-filled if available)</label>
+      <input type="number" name="hrv_ms" step="0.1" placeholder="e.g. 52.0">
+      <p style="font-size:12px;color:var(--c-muted);margin-top:4px;">Leave empty unless you want to override the watch value.</p>
+    </div>
+
+    <div class="form-group">
+      <label>Pain or discomfort?</label>
+      <select name="pain_flag">
+        <option value="">No</option>
+        <option value="1">Yes</option>
+      </select>
+    </div>
+
+    <div class="form-group" id="pain-loc-wrap" style="display:none;">
+      <label>Where?</label>
+      <input type="text" name="pain_location" placeholder="e.g. left knee">
+    </div>
+
+    <div class="form-group">
+      <label>Notes (optional)</label>
+      <textarea name="notes" rows="2" placeholder="Anything else worth remembering..."></textarea>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Save</button>
+    <a href="/" class="btn btn-secondary" style="margin-left:8px;">Cancel</a>
+  </form>
+</div>
+
+{% if recent_feedback %}
+<div class="card">
+  <div class="card-title">Recent entries</div>
+  {% for fb in recent_feedback %}
+  <div style="display:flex;gap:1rem;padding:8px 0;border-bottom:0.5px solid var(--c-border);font-size:13px;flex-wrap:wrap;">
+    <span style="color:var(--c-muted);width:80px;">{{ fb.date.strftime('%d %b') }}</span>
+    {% if fb.rpe %}<span>RPE <strong>{{ fb.rpe }}</strong></span>{% endif %}
+    {% if fb.mood %}<span>Mood <strong>{{ fb.mood }}/5</strong></span>{% endif %}
+    {% if fb.sleep_hours %}<span>Sleep <strong>{{ fb.sleep_hours }}h</strong></span>{% endif %}
+    {% if fb.hrv_ms %}<span>HRV <strong>{{ fb.hrv_ms }} ms</strong></span>{% endif %}
+    {% if fb.pain_flag %}<span style="color:var(--c-red);">Pain: {{ fb.pain_location }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+document.querySelector('select[name=pain_flag]').addEventListener('change', function() {
+  document.getElementById('pain-loc-wrap').style.display = this.value ? 'block' : 'none';
+});
+</script>
+{% endblock %}

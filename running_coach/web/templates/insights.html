@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Insights — Running Coach{% endblock %}
+{% block content %}
+
+<p style="font-size:13px;color:var(--c-muted);margin-bottom:1.25rem;">
+  Data-driven signals to help you train smarter and stay injury-free.
+</p>
+
+<!-- Injury risk -->
+<div class="card">
+  <div class="card-title">Injury risk</div>
+
+  {% set risk_colors = {'low':'var(--c-teal)','moderate':'#ef9f27','high':'var(--c-red)','unknown':'var(--c-muted)'} %}
+  <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;">
+    <div style="font-size:42px;font-weight:700;color:{{ risk_colors[risk.level] }};">
+      {{ risk.score|int }}
+    </div>
+    <div>
+      <div style="font-size:15px;font-weight:500;color:{{ risk_colors[risk.level] }};text-transform:capitalize;">
+        {{ risk.level }} risk
+      </div>
+      <div style="font-size:13px;color:var(--c-muted);">out of 100 — lower is safer</div>
+    </div>
+  </div>
+
+  {% if risk.factors %}
+  <div style="margin-bottom:1rem;">
+    {% for name, val in risk.factors.items() %}
+    <div class="bar-row">
+      <span class="bar-label" style="text-transform:capitalize;">{{ name.replace('_',' ') }}</span>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:{{ [val,100]|min }}%;background:{{ risk_colors[risk.level] }};"></div>
+      </div>
+      <span class="bar-val">{{ val|int }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if risk.advice %}
+  {% for tip in risk.advice %}
+  <div class="warning" style="margin-bottom:6px;">{{ tip }}</div>
+  {% endfor %}
+  {% else %}
+  <p style="font-size:13px;color:var(--c-teal);">No risk flags — training load looks balanced.</p>
+  {% endif %}
+
+  <details style="margin-top:1rem;">
+    <summary style="font-size:12px;color:var(--c-muted);cursor:pointer;">How is this calculated?</summary>
+    <div style="font-size:12px;color:var(--c-muted);margin-top:8px;line-height:1.7;">
+      <strong>ACWR</strong> (45%) — Acute:Chronic Workload Ratio. Compares this week's load
+      to your 4-week average. Above 1.5 is the "danger zone" in sports science research.<br>
+      <strong>Monotony</strong> (25%) — doing the same effort every day with no variation.
+      High monotony means no recovery stimulus.<br>
+      <strong>Consecutive days</strong> (15%) — more than 4 days running without rest.<br>
+      <strong>Volume spike</strong> (15%) — week-on-week increase above 30%.
+    </div>
+  </details>
+</div>
+
+<!-- Race time predictor -->
+{% if race_pred %}
+<div class="card">
+  <div class="card-title">Race time prediction — {{ profile.race_distance_km }} km</div>
+
+  {% if race_pred.available %}
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem;">
+    <div class="metric">
+      <div class="metric-label">Predicted finish</div>
+      <div class="metric-value" style="font-size:26px;">{{ race_pred.predicted_time }}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Target pace</div>
+      <div class="metric-value" style="font-size:26px;">{{ race_pred.target_pace }}</div>
+    </div>
+  </div>
+  <p style="font-size:12px;color:var(--c-muted);">
+    Based on your {{ race_pred.ref_run_dist }} km run on {{ race_pred.ref_run_date }}
+    ({{ race_pred.ref_run_pace }}) using the Riegel formula.
+    Confidence: <strong>{{ race_pred.confidence }}</strong>
+    {% if race_pred.confidence == 'low' %} — add more runs to improve accuracy{% endif %}.
+  </p>
+  <details style="margin-top:0.75rem;">
+    <summary style="font-size:12px;color:var(--c-muted);cursor:pointer;">How does the Riegel formula work?</summary>
+    <div style="font-size:12px;color:var(--c-muted);margin-top:8px;line-height:1.7;">
+      T2 = T1 × (D2/D1)^1.06 — where T1 is your reference time over D1 km,
+      and T2 is the predicted time over D2 km. The exponent 1.06 accounts for
+      the fact that running gets disproportionately harder at longer distances.
+      We then adjust for your current fitness trend (recent vs historical volume).
+    </div>
+  </details>
+  {% else %}
+  <p style="font-size:13px;color:var(--c-muted);">{{ race_pred.reason }}</p>
+  {% endif %}
+</div>
+{% elif not profile.race_distance_km %}
+<div class="card">
+  <div class="card-title">Race time prediction</div>
+  <p style="font-size:13px;color:var(--c-muted);">
+    Set a race goal first →
+    <a href="/race" style="color:var(--c-teal);">Race plan page</a>
+  </p>
+</div>
+{% endif %}
+
+{% if runs_count < 5 %}
+<div class="card" style="border-color:var(--c-border);">
+  <p style="font-size:13px;color:var(--c-muted);">
+    Insights improve with more data. You have {{ runs_count }} run(s).
+    Connect Garmin to import your recent running history.
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}
