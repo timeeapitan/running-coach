@@ -71,33 +71,16 @@ def _ensure_garth(session_dir: str = DEFAULT_SESSION_DIR) -> None:
         )
         raise RuntimeError(_garth_session_error)
 
-    import garth, json
-    from garth.auth_tokens import OAuth1Token, OAuth2Token
+    import garth
 
-    # Load tokens directly using garth's own token classes —
-    # same as what garth.resume() does internally but without any network call.
-    # garth.resume() itself is just file I/O + configure(), no OAuth exchange.
-    try:
-        with open(os.path.join(session_dir, "oauth1_token.json")) as f:
-            oauth1 = OAuth1Token(**json.load(f))
-        with open(os.path.join(session_dir, "oauth2_token.json")) as f:
-            oauth2 = OAuth2Token(**json.load(f))
-        garth.configure(
-            oauth1_token=oauth1,
-            oauth2_token=oauth2,
-            domain=oauth1.domain,
-        )
-        _garth_session_loaded = True
-        print(f"[GARMIN] tokens loaded from disk (no network call)", flush=True)
-        return
-    except Exception as exc:
-        print(f"[GARMIN] token load failed ({exc}) — falling back to garth.resume()", flush=True)
-
-    # Fallback: garth.resume() — also no network call, just file I/O
+    # Simple approach: garth.resume() reads token files from disk.
+    # This does NOT make any network call — it is purely file I/O.
+    # The OAuth exchange only happens lazily when garth needs to refresh
+    # an expired token during an actual API call.
     try:
         garth.resume(session_dir)
         _garth_session_loaded = True
-        print(f"[GARMIN] garth.resume() succeeded", flush=True)
+        print(f"[GARMIN] session loaded from {session_dir}", flush=True)
     except Exception as exc:
         _garth_session_error = (
             f"Could not load Garmin session: {exc}. "

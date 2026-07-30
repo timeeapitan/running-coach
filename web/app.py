@@ -488,11 +488,9 @@ def dashboard():
     # Dashboard is the only normal page that may auto-sync.
     # If today's cache is missing, this fetches Garmin once and saves cache.
     # Later visits today read from runs_cache/daily_cache instantly.
-    # Do NOT auto-fetch on dashboard load — Garmin rate-limits aggressively.
-    # Data is fetched only when user explicitly taps Sync (/refresh route).
-    runs     = _load_runs(uid, auto_fetch=False)
+    runs     = _load_runs(uid, auto_fetch=True)
     feedback = load_feedback(uid)
-    feedback, watch_health = _merge_watch_feedback(uid, feedback, auto_fetch=False)
+    feedback, watch_health = _merge_watch_feedback(uid, feedback, auto_fetch=True)
     coach    = _get_coach(uid, profile)
     schedule = load_schedule(uid)
 
