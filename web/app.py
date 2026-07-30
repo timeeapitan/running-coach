@@ -20,6 +20,7 @@ from web.db import (
     load_cached_summary, save_cached_summary, load_daily_cache_raw,
     load_cached_runs, save_cached_runs, invalidate_runs_cache,
     load_cached_watch_health, save_cached_watch_health, invalidate_watch_health_cache, mark_sync_failed,
+    load_schedule, save_schedule,
 )
 from running_coach.schemas.profile  import RunnerProfile
 from running_coach.schemas.feedback import ManualFeedback
@@ -491,6 +492,7 @@ def dashboard():
     feedback = load_feedback(uid)
     feedback, watch_health = _merge_watch_feedback(uid, feedback, auto_fetch=True)
     coach    = _get_coach(uid, profile)
+    schedule = load_schedule(uid)
 
     # No runs yet — still show a profile-based recommendation using rules engine
     is_new_user = len(runs) == 0
@@ -512,6 +514,11 @@ def dashboard():
             _save_profile_obj(uid, coach.profile)
 
     analysis = coach.analyze(runs, feedback)
+
+    # Determine what today's schedule says
+    import datetime as _dt
+    today_name = _dt.datetime.now().strftime("%A").lower()  # e.g. "monday"
+    planned_type = schedule.get(today_name, "coach")  # what user planned for today
     rec = (coach.predict_next_run(runs, feedback)
            if len(runs) >= NextRunPredictor.MIN_RUNS_FOR_PERSONALISATION
            else coach.recommend(analysis, runs))
@@ -530,6 +537,31 @@ def dashboard():
     if summary and summary.get("should_run_today") is False:
         rec = _rest_recommendation_from_summary(summary)
 
+    # Build planned recommendation if schedule specifies a type (not "coach")
+    planned_rec = None
+    if planned_type != "coach" and planned_type != "rest" and not analysis.warnings:
+        from running_coach.schemas.enums import WorkoutType as _WT
+        type_map = {
+            "easy":     _WT.EASY,
+            "moderate": _WT.MODERATE,
+            "tempo":    _WT.TEMPO,
+            "long_run": _WT.LONG_RUN,
+            "interval": _WT.INTERVAL,
+        }
+        if planned_type in type_map:
+            planned_rec = coach.rules.recommend_specific_type(
+                analysis, runs, type_map[planned_type]
+            )
+    elif planned_type == "rest":
+        from running_coach.schemas.enums import WorkoutType as _WT, Intensity as _IN
+        from running_coach.schemas.workout import WorkoutRecommendation as _WR
+        planned_rec = _WR(
+            workout_type=_WT.REST, intensity=_IN.VERY_EASY,
+            description="Rest day",
+            rationale="You planned a rest day for today.",
+            steps=[{"label": "Rest", "detail": "No run today — scheduled rest."}],
+        )
+
     return render_template("dashboard.html",
         profile=profile, analysis=analysis, recommendation=rec,
         zones=profile.get_hr_zones(), prs=_compute_prs(runs),
@@ -541,6 +573,9 @@ def dashboard():
         watch_health=watch_health,
         latest_run=sorted(runs, key=lambda r: r.date, reverse=True)[0] if runs else None,
         no_runs=False, error=None,
+        planned_rec=planned_rec,
+        today_planned=planned_type,
+        schedule=schedule,
         user_name=current_user_name(), user_avatar=current_user_avatar())
 
 
@@ -702,6 +737,11 @@ def refresh_summary():
     coach    = _get_coach(uid, profile)
     analysis = coach.analyze(runs, feedback)
 
+    # Determine what today's schedule says
+    import datetime as _dt
+    today_name = _dt.datetime.now().strftime("%A").lower()  # e.g. "monday"
+    planned_type = schedule.get(today_name, "coach")  # what user planned for today
+
     from running_coach.ml.models.next_run_predictor import NextRunPredictor
     rec = (coach.predict_next_run(runs, feedback)
            if len(runs) >= NextRunPredictor.MIN_RUNS_FOR_PERSONALISATION
@@ -710,6 +750,32 @@ def refresh_summary():
     summary = build_daily_summary(runs, profile, analysis, rec, feedback)
     save_cached_summary(uid, summary)  # overwrites today's cache
     return redirect(url_for("dashboard"))
+
+
+@app.route("/schedule", methods=["GET", "POST"])
+@login_required
+def schedule():
+    uid = current_user_id()
+    profile = _get_profile(uid)
+    if not profile:
+        return redirect(url_for("setup"))
+
+    if request.method == "POST":
+        from web.db import DAYS, VALID_TYPES
+        sched = {}
+        for day in DAYS:
+            val = request.form.get(day, "coach")
+            sched[day] = val if val in VALID_TYPES else "coach"
+        save_schedule(uid, sched)
+        return redirect(url_for("schedule"))
+
+    sched = load_schedule(uid)
+    return render_template("schedule.html",
+        profile=profile,
+        schedule=sched,
+        user_name=current_user_name(),
+        user_avatar=current_user_avatar(),
+    )
 
 
 @app.route("/api/health")

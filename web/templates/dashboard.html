@@ -201,6 +201,27 @@
 {% endif %}
 
 <!-- ── TODAY / NEXT RUN ── -->
+{% if planned_rec and today_planned != "coach" %}
+<!-- Planned run card -->
+<div style="margin-bottom:0.75rem;">
+  <div style="font-size:11px;font-weight:600;color:var(--c-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">
+    📅 Your plan for today
+  </div>
+  <div style="border-left:3px solid var(--c-purple);background:var(--c-purple-bg);border-radius:0 var(--radius-sm) var(--radius-sm) 0;padding:0.85rem 1rem;">
+    <div style="font-size:16px;font-weight:600;margin-bottom:2px;">{{ planned_rec.description }}</div>
+    <div style="font-size:13px;color:var(--c-muted);">{{ planned_rec.rationale }}</div>
+    {% if planned_rec.target_distance_km %}
+    <div style="margin-top:6px;font-size:13px;">
+      {{ planned_rec.target_distance_km }} km · ~{{ planned_rec.target_duration_minutes|int }} min · {{ planned_rec.target_hr_zone }} zone
+    </div>
+    {% endif %}
+  </div>
+</div>
+<div style="font-size:11px;font-weight:600;color:var(--c-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">
+  🤖 Coach adjustment
+</div>
+{% endif %}
+
 <div class="rec-box">
   <div class="card-title">{% if summary and summary.should_run_today is sameas false %}Recovery gate{% else %}Today’s run{% endif %}</div>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">

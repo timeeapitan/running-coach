@@ -133,3 +133,17 @@ create policy "service role full access on runs_cache" on runs_cache for all usi
 
 drop policy if exists "service role full access on daily_cache" on daily_cache;
 create policy "service role full access on daily_cache" on daily_cache for all using (true) with check (true);
+
+-- Weekly schedule — stores per-user day assignments
+-- schedule is a JSON object like:
+-- {"monday": "rest", "tuesday": "easy", "wednesday": "rest",
+--  "thursday": "moderate", "friday": "rest", "saturday": "long_run", "sunday": "rest"}
+create table if not exists weekly_schedule (
+  username    text primary key references users(username) on delete cascade,
+  schedule    jsonb not null default '{}',
+  updated_at  timestamp with time zone default now()
+);
+
+alter table weekly_schedule enable row level security;
+create policy "service role full access on weekly_schedule"
+  on weekly_schedule for all using (true);

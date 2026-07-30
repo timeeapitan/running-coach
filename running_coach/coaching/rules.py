@@ -27,6 +27,39 @@ class CoachingRules:
     def __init__(self, profile: RunnerProfile):
         self.profile = profile
 
+    def recommend_specific_type(
+        self,
+        analysis: AnalysisResult,
+        runs: list,
+        workout_type,
+    ):
+        """
+        Return a recommendation for a specific workout type,
+        adjusted for current fatigue and readiness.
+        """
+        from ..schemas.enums import WorkoutType
+
+        # Safety override — if fatigue too high, downgrade to easy
+        if analysis.fatigue_score >= 80:
+            return self._easy_run(analysis, runs,
+                "Your fatigue is high — downgraded to easy even though you planned something harder.")
+
+        if workout_type == WorkoutType.LONG_RUN:
+            return self._long_run(analysis, runs)
+        elif workout_type == WorkoutType.TEMPO:
+            # Only allow tempo if readiness is sufficient
+            if analysis.readiness_score < 60:
+                return self._moderate_run(analysis, runs)
+            return self._tempo_run(analysis, runs)
+        elif workout_type == WorkoutType.INTERVAL:
+            if analysis.readiness_score < 70:
+                return self._tempo_run(analysis, runs)
+            return self._interval_session(analysis, runs)
+        elif workout_type == WorkoutType.MODERATE:
+            return self._moderate_run(analysis, runs)
+        else:
+            return self._easy_run(analysis, runs, "Easy run as planned.")
+
     def recommend(
         self,
         analysis: AnalysisResult,

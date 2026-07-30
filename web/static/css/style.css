@@ -502,3 +502,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--c-teal); }
   line-height: 1.45;
 }
 @keyframes sync-spin { to { transform: rotate(360deg); } }
+
+/* ── Schedule chips ── */
+.schedule-chip {
+  display: inline-block;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 0.5px solid var(--c-border);
+  background: var(--c-bg);
+  color: var(--c-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.schedule-chip:hover { border-color: var(--c-teal); color: var(--c-teal); }
+.schedule-chip--active { font-weight: 500; }

@@ -72,52 +72,38 @@ def _ensure_garth(session_dir: str = DEFAULT_SESSION_DIR) -> None:
         raise RuntimeError(_garth_session_error)
 
     import garth, json
+    from garth.auth_tokens import OAuth1Token, OAuth2Token
 
-    # Load tokens directly from disk without calling Garmin's OAuth endpoint.
-    # garth.resume() validates the token online which triggers the 429-prone
-    # OAuth exchange endpoint on every process restart.
-    # Instead we load the token files manually and let garth refresh lazily
-    # only when it actually needs to make an API call.
+    # Load tokens directly using garth's own token classes —
+    # same as what garth.resume() does internally but without any network call.
+    # garth.resume() itself is just file I/O + configure(), no OAuth exchange.
     try:
         with open(os.path.join(session_dir, "oauth1_token.json")) as f:
-            oauth1 = json.load(f)
+            oauth1 = OAuth1Token(**json.load(f))
         with open(os.path.join(session_dir, "oauth2_token.json")) as f:
-            oauth2 = json.load(f)
-
-        # Configure garth with the loaded tokens without network validation
-        garth.configure(oauth1_token=oauth1, oauth2_token=oauth2)
+            oauth2 = OAuth2Token(**json.load(f))
+        garth.configure(
+            oauth1_token=oauth1,
+            oauth2_token=oauth2,
+            domain=oauth1.domain,
+        )
         _garth_session_loaded = True
-        print(f"[GARMIN] garth session loaded from disk (no network call)", flush=True)
+        print(f"[GARMIN] tokens loaded from disk (no network call)", flush=True)
         return
-    except (AttributeError, TypeError):
-        # Older garth versions don't support configure() — fall back to resume()
-        pass
+    except Exception as exc:
+        print(f"[GARMIN] token load failed ({exc}) — falling back to garth.resume()", flush=True)
+
+    # Fallback: garth.resume() — also no network call, just file I/O
+    try:
+        garth.resume(session_dir)
+        _garth_session_loaded = True
+        print(f"[GARMIN] garth.resume() succeeded", flush=True)
     except Exception as exc:
         _garth_session_error = (
-            f"Could not load token files: {exc}. "
+            f"Could not load Garmin session: {exc}. "
             "Regenerate oauth1_token.json and oauth2_token.json and re-upload to Render Secret Files."
         )
         raise RuntimeError(_garth_session_error) from exc
-
-    # Fallback: resume() with 429 protection
-    for attempt in range(3):
-        try:
-            garth.resume(session_dir)
-            _garth_session_loaded = True
-            print(f"[GARMIN] garth session resumed via garth.resume()", flush=True)
-            return
-        except Exception as exc:
-            msg = str(exc)
-            if "429" in msg and attempt < 2:
-                wait = 60 * (attempt + 1)
-                print(f"[GARMIN] 429 on session resume — waiting {wait}s (attempt {attempt+1}/3)", flush=True)
-                import time; time.sleep(wait)
-            else:
-                _garth_session_error = (
-                    f"Could not load Garmin session: {exc}. "
-                    "Regenerate oauth1_token.json and oauth2_token.json and re-upload to Render Secret Files."
-                )
-                raise RuntimeError(_garth_session_error) from exc
 
 
 def secret_session_available(session_dir: str = DEFAULT_SESSION_DIR) -> bool:

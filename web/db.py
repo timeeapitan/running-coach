@@ -474,3 +474,60 @@ def mark_sync_failed(username: str, error: str, date_str: str | None = None) -> 
 def invalidate_watch_health_cache(username: str, date_str: str | None = None) -> None:
     # Historical daily rows are kept. Force refresh is controlled by /refresh cooldown.
     return
+
+
+# ── Weekly schedule ───────────────────────────────────────────────────────────
+
+DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+VALID_TYPES = {"rest", "easy", "moderate", "tempo", "long_run", "interval", "coach"}
+# "coach" means: let the coaching engine decide for that day
+
+
+def load_schedule(username: str) -> dict:
+    """Return {day: run_type} dict. Defaults to all 'coach' (engine decides)."""
+    default = {d: "coach" for d in DAYS}
+    if not USE_DB:
+        return _file_load_schedule(username) or default
+    try:
+        rows = _sb_get("weekly_schedule", f"?username=eq.{username}&select=schedule")
+        if not rows or not rows[0].get("schedule"):
+            return default
+        raw = rows[0]["schedule"]
+        sched = raw if isinstance(raw, dict) else json.loads(raw)
+        # Fill any missing days with 'coach'
+        return {d: sched.get(d, "coach") for d in DAYS}
+    except Exception as e:
+        print(f"[DB] load_schedule error: {e}", flush=True)
+        return default
+
+
+def save_schedule(username: str, schedule: dict) -> None:
+    """Save {day: run_type} dict."""
+    # Validate and sanitise
+    clean = {d: schedule.get(d, "coach") for d in DAYS}
+    clean = {d: (v if v in VALID_TYPES else "coach") for d, v in clean.items()}
+    if not USE_DB:
+        _file_save_schedule(username, clean)
+        return
+    try:
+        existing = _sb_get("weekly_schedule", f"?username=eq.{username}&select=username")
+        if existing:
+            _sb_patch("weekly_schedule", {"schedule": clean}, f"?username=eq.{username}")
+        else:
+            _sb_insert("weekly_schedule", {"username": username, "schedule": clean})
+    except Exception as e:
+        print(f"[DB] save_schedule error: {e}", flush=True)
+
+
+def _file_load_schedule(username: str):
+    p = os.path.join(_udir(username), "schedule.json")
+    if not os.path.exists(p):
+        return None
+    with open(p) as f:
+        return json.load(f)
+
+
+def _file_save_schedule(username: str, schedule: dict):
+    p = os.path.join(_udir(username), "schedule.json")
+    with open(p, "w") as f:
+        json.dump(schedule, f, indent=2)
