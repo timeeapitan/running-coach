@@ -297,6 +297,7 @@ nav {
 .pr-item { background: var(--c-purple-bg); border-radius: var(--radius-sm); padding: 10px 12px; }
 .pr-item .metric-value { font-size: 18px; color: var(--c-purple); }
 .pr-item .metric-label { color: var(--c-purple); }
+.pr-item .metric-sub   { font-size: 11px; color: var(--c-muted); margin-top: 2px; }
 
 /* ── History run rows ── */
 .run-row { display: grid; grid-template-columns: 90px 1fr 60px 70px 50px; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 0.5px solid var(--c-border); font-size: 13px; }

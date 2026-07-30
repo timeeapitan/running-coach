@@ -113,13 +113,13 @@ def _garth_get(path: str, params: dict = None, retries: int = 2) -> Any:
         except Exception as exc:
             msg = str(exc)
             if "429" in msg:
-                wait = 120 * (attempt + 1)  # 120s, 240s, 360s
-                print(f"[GARMIN] 429 on {path} — waiting {wait}s (attempt {attempt+1}/{retries+1})", flush=True)
-                time.sleep(wait)
-                last_exc = exc
+                # Fail immediately — do not block the worker with long sleeps.
+                # The rate limit guard in app.py will prevent retries for 5 minutes.
+                print(f"[GARMIN] 429 on {path} — rate limited", flush=True)
+                raise
             else:
                 raise
-    raise RuntimeError(f"Garmin API rate limit after {retries+1} attempts on {path}") from last_exc
+    raise RuntimeError(f"Garmin API failed on {path}") from last_exc
 
 
 def _garth_get_first(paths: list[str]) -> Any:

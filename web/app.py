@@ -495,11 +495,15 @@ def dashboard():
     # Dashboard is the only normal page that may auto-sync.
     # If today's cache is missing, this fetches Garmin once and saves cache.
     # Later visits today read from runs_cache/daily_cache instantly.
-    runs     = _load_runs(uid, auto_fetch=True)
+    runs     = _load_runs(uid, auto_fetch=False)
     feedback = load_feedback(uid)
-    feedback, watch_health = _merge_watch_feedback(uid, feedback, auto_fetch=True)
+    feedback, watch_health = _merge_watch_feedback(uid, feedback, auto_fetch=False)
     coach    = _get_coach(uid, profile)
     schedule = load_schedule(uid)
+
+    # Personal stats — form score, VO2max, fitness age, personal bests, streak
+    from running_coach.analysis.personal_stats import compute_personal_stats
+    personal_stats = compute_personal_stats(runs, profile) if runs else {}
 
     # Pre-compute sync availability for the template
     # so the JS knows instantly without an extra API call
@@ -527,8 +531,10 @@ def dashboard():
         if _lcr(uid):
             sync_rate_limited = True  # cache has data but fetch failed
 
-    if len(runs) >= 10 and not coach.trainer.fatigue_predictor.is_trained:
-        coach.train_models(runs)
+    # ML training disabled — uses too much memory on Render free tier (512MB limit)
+    # Re-enable when running on a paid plan with more memory
+    # if len(runs) >= 10 and not coach.trainer.fatigue_predictor.is_trained:
+    #     coach.train_models(runs)
 
     # Auto-detect fitness level (only when we have data)
     fitness_result = {"changed": False, "reason": "", "level": profile.fitness_level}
@@ -602,6 +608,7 @@ def dashboard():
         schedule=schedule,
         sync_available=sync_available,
         sync_wait_message=sync_wait_message,
+        personal_stats=personal_stats,
         user_name=current_user_name(), user_avatar=current_user_avatar())
 
 
