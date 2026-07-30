@@ -59,25 +59,41 @@
       overlay.setAttribute("aria-hidden", "false");
     }
 
-    // Show feedback when navigating between server-rendered tabs.
-    document.querySelectorAll('a[href]').forEach(function (link) {
-      link.addEventListener("click", function () {
-        var href = link.getAttribute("href") || "";
-        if (!href || href.startsWith("#") || href.startsWith("mailto:") || href === "/logout") return;
-        if (href === "/refresh") {
-          showOverlay("Syncing your watch data", "Fetching your latest activities and recovery metrics. This can take a few seconds.");
-        } else if (href.startsWith("/") || href.startsWith(window.location.origin)) {
-          showOverlay("Loading", "Preparing this page from your cached running data.");
-        }
+      // Only show overlay for sync/refresh actions — not regular navigation
+    // Regular page transitions load from cache and are instant
+    var syncLinks = document.querySelectorAll('a[href="/refresh"], a[href^="/refresh?"]');
+    syncLinks.forEach(function(link) {
+      link.addEventListener("click", function(e) {
+        showOverlay("Syncing your watch data", "Fetching your latest activities from Garmin. This usually takes 5–15 seconds.");
+        startProgressMessages();
       });
     });
 
-    // Also show feedback on form submits, because setup/notes can save and redirect.
-    document.querySelectorAll("form").forEach(function (form) {
-      form.addEventListener("submit", function () {
-        showOverlay("Saving", "Updating your running coach data.");
+    // Form submits (setup, schedule, log, race goal)
+    document.querySelectorAll("form").forEach(function(form) {
+      form.addEventListener("submit", function() {
+        showOverlay("Saving", "Updating your settings.");
       });
     });
+
+    // Cycle through reassuring messages while syncing
+    var progressMessages = [
+      "Connecting to Garmin...",
+      "Fetching your latest activities...",
+      "Analysing your training data...",
+      "Calculating today's recommendation...",
+      "Almost done...",
+    ];
+    var progressTimer = null;
+    function startProgressMessages() {
+      var i = 0;
+      progressTimer = setInterval(function() {
+        i++;
+        if (i < progressMessages.length && text) {
+          text.textContent = progressMessages[i];
+        }
+      }, 3000);
+    }
   });
 </script>
 
