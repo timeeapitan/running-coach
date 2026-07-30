@@ -725,8 +725,9 @@ def refresh_summary():
         try:
             last_sync = datetime.fromisoformat(str(last_sync_text).replace("Z", "+00:00")).replace(tzinfo=None)
             if datetime.now() - last_sync < timedelta(minutes=60):
-                print("[GARMIN SYNC] skipped: refreshed less than 30 minutes ago", flush=True)
-                return redirect(url_for("dashboard"))
+                mins = int((datetime.now() - last_sync).total_seconds() / 60)
+                print(f"[GARMIN SYNC] skipped: synced {mins}m ago", flush=True)
+                return redirect(url_for("dashboard") + "?skipped=1")
         except Exception:
             pass
 
