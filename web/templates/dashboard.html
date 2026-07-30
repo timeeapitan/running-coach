@@ -165,16 +165,22 @@
     {% endif %}
 
     {# HR Zone with actual BPM range #}
-    {% if recommendation.target_hr_zone and recommendation.target_hr_zone in zones %}
-    {% set zone_lo = zones[recommendation.target_hr_zone][0] %}
-    {% set zone_hi = zones[recommendation.target_hr_zone][1] %}
-    {% set zone_col = zone_colors.get(recommendation.target_hr_zone, '#6b6960') %}
+    {% set hr_zone = recommendation.target_hr_zone %}
+    {% if hr_zone and hr_zone in zones %}
+    {% set zone_lo = zones[hr_zone][0] %}
+    {% set zone_hi = zones[hr_zone][1] %}
+    {% set zone_col = zone_colors.get(hr_zone, '#6b6960') %}
     <div class="target-item">
       <div class="target-label">HR Zone</div>
       <div class="target-value" style="color:{{ zone_col }};">
-        {{ recommendation.target_hr_zone|capitalize }}
+        {{ hr_zone|capitalize }}
         <span style="font-size:12px;color:var(--c-muted);font-weight:400;"> · {{ zone_lo }}–{{ zone_hi }} bpm</span>
       </div>
+    </div>
+    {% elif hr_zone %}
+    <div class="target-item">
+      <div class="target-label">HR Zone</div>
+      <div class="target-value">{{ hr_zone|capitalize }}</div>
     </div>
     {% endif %}
 

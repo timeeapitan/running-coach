@@ -547,8 +547,9 @@ def dashboard():
 
     # Determine what today's schedule says
     import datetime as _dt
-    today_name = _dt.datetime.now().strftime("%A").lower()  # e.g. "monday"
-    planned_type = schedule.get(today_name, "coach")  # what user planned for today
+    today_name   = _dt.datetime.now().strftime("%A").lower()
+    user_schedule = load_schedule(uid)
+    planned_type  = user_schedule.get(today_name, "coach")
     rec = (coach.predict_next_run(runs, feedback)
            if len(runs) >= NextRunPredictor.MIN_RUNS_FOR_PERSONALISATION
            else coach.recommend(analysis, runs))
@@ -775,8 +776,9 @@ def refresh_summary():
 
     # Determine what today's schedule says
     import datetime as _dt
-    today_name = _dt.datetime.now().strftime("%A").lower()  # e.g. "monday"
-    planned_type = schedule.get(today_name, "coach")  # what user planned for today
+    today_name   = _dt.datetime.now().strftime("%A").lower()
+    user_schedule = load_schedule(uid)
+    planned_type  = user_schedule.get(today_name, "coach")
 
     from running_coach.ml.models.next_run_predictor import NextRunPredictor
     rec = (coach.predict_next_run(runs, feedback)
