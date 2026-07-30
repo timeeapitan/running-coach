@@ -39,6 +39,13 @@ _MODEL_CACHE = {}
 _GARMIN_RATE_LIMITED_UNTIL = None
 _GARMIN_RATE_LIMIT_SECONDS = 300  # 5 min backoff after any 429
 
+# Set rate limit at startup to prevent immediate Garmin fetch after restart/crash.
+# This gives the process time to stabilise before hitting the API.
+# Cleared after 60 seconds so first user Sync still works quickly.
+import time as _time
+_GARMIN_RATE_LIMITED_UNTIL = datetime.now() + __import__('datetime').timedelta(seconds=60)
+print("[STARTUP] 60s Garmin cooldown set to prevent post-restart 429", flush=True)
+
 def _garmin_is_rate_limited() -> bool:
     global _GARMIN_RATE_LIMITED_UNTIL
     if _GARMIN_RATE_LIMITED_UNTIL is None:

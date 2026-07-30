@@ -3,7 +3,7 @@ services:
     name: running-coach
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn web.app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    startCommand: gunicorn web.app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 300 --max-requests 100 --max-requests-jitter 10 --preload
     envVars:
       - key: SECRET_KEY
         generateValue: true
@@ -11,12 +11,3 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
-      - key: STRAVA_CLIENT_ID
-        sync: false
-      - key: STRAVA_CLIENT_SECRET
-        sync: false
-      - key: RENDER_EXTERNAL_URL
-        fromService:
-          type: web
-          name: running-coach
-          property: host
