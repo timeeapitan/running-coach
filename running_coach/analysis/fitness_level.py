@@ -15,8 +15,10 @@ from ..schemas.enums import FitnessLevel
 def detect_fitness_level(runs: List[NormalizedRun], profile: RunnerProfile) -> Dict:
     if not runs or len(runs) < 3:
         return {
-            "level": FitnessLevel.BEGINNER, "changed": False,
-            "reason": "Not enough runs yet.", "evidence": [],
+            "level": FitnessLevel.BEGINNER,
+            "changed": profile.fitness_level != FitnessLevel.BEGINNER,
+            "reason": "Not enough runs yet to assess fitness level.",
+            "evidence": [],
         }
 
     now        = datetime.now()

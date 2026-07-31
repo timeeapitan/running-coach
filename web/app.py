@@ -321,6 +321,11 @@ def _load_runs(uid, force=False, auto_fetch=False):
     if not should_fetch:
         return _deserialize_runs(cached) if cached is not None else []
 
+    # Check global rate limit before hitting Garmin
+    if _garmin_is_rate_limited():
+        print("[GARMIN] rate limited — serving cache", flush=True)
+        return _deserialize_runs(cached) if cached is not None else []
+
     try:
         runs = _get_garmin_parser(uid).fetch_runs(max_runs=30)
         print(f"[GARMIN] fetched {len(runs)} recent runs", flush=True)
@@ -329,9 +334,15 @@ def _load_runs(uid, force=False, auto_fetch=False):
         merged = load_cached_runs(uid)
         return _deserialize_runs(merged) if merged is not None else runs
     except Exception as e:
-        import traceback
-        print("[GARMIN SYNC] fetch failed:", repr(e), flush=True)
-        print(traceback.format_exc(), flush=True)
+        err = repr(e)
+        if "429" in err:
+            # Fail fast — set global rate limit, serve cache immediately
+            _garmin_set_rate_limited()
+            print("[GARMIN] 429 — rate limit set, serving cache", flush=True)
+        else:
+            import traceback
+            print("[GARMIN SYNC] fetch failed:", err, flush=True)
+            print(traceback.format_exc(), flush=True)
         try:
             mark_sync_failed(uid, str(e))
         except Exception:
@@ -495,9 +506,10 @@ def dashboard():
     # Dashboard is the only normal page that may auto-sync.
     # If today's cache is missing, this fetches Garmin once and saves cache.
     # Later visits today read from runs_cache/daily_cache instantly.
-    runs     = _load_runs(uid, auto_fetch=False)
+    # Auto-fetch once per day — fails fast on 429 (no blocking retries), serves cache silently
+    runs     = _load_runs(uid, auto_fetch=True)
     feedback = load_feedback(uid)
-    feedback, watch_health = _merge_watch_feedback(uid, feedback, auto_fetch=False)
+    feedback, watch_health = _merge_watch_feedback(uid, feedback, auto_fetch=True)
     coach    = _get_coach(uid, profile)
     schedule = load_schedule(uid)
 
