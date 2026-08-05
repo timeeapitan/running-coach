@@ -795,10 +795,24 @@ def refresh_summary():
     from running_coach.ml.models.next_run_predictor import NextRunPredictor
     rec = (coach.predict_next_run(runs, feedback)
            if len(runs) >= NextRunPredictor.MIN_RUNS_FOR_PERSONALISATION
-           else coach.recommend(analysis))
+           else coach.recommend(analysis, runs))
+
+    # Apply scheduled type override
+    if planned_type not in ("coach", "rest"):
+        from running_coach.schemas.enums import WorkoutType as _WT
+        type_map = {"easy": _WT.EASY, "moderate": _WT.MODERATE,
+                    "tempo": _WT.TEMPO, "long_run": _WT.LONG_RUN,
+                    "interval": _WT.INTERVAL}
+        if planned_type in type_map:
+            rec = coach.rules.recommend_specific_type(analysis, runs, type_map[planned_type])
+    elif planned_type == "rest":
+        from running_coach.schemas.enums import WorkoutType as _WT, Intensity as _IN
+        from running_coach.schemas.workout import WorkoutRecommendation as _WR
+        rec = _WR(workout_type=_WT.REST, intensity=_IN.VERY_EASY,
+                  description="Rest day", rationale="Scheduled rest day.", steps=[])
 
     summary = build_daily_summary(runs, profile, analysis, rec, feedback)
-    save_cached_summary(uid, summary)  # overwrites today's cache
+    save_cached_summary(uid, summary)
     return redirect(url_for("dashboard"))
 
 
@@ -817,6 +831,12 @@ def schedule():
             val = request.form.get(day, "coach")
             sched[day] = val if val in VALID_TYPES else "coach"
         save_schedule(uid, sched)
+        # Invalidate today's cached summary so dashboard rebuilds with new schedule
+        try:
+            from web.db import save_cached_summary as _scs
+            _scs(uid, {})  # clear by saving empty — next sync will rebuild
+        except Exception:
+            pass
         return redirect(url_for("schedule"))
 
     sched = load_schedule(uid)

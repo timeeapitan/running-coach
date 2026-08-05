@@ -6,13 +6,6 @@
 {% set zone_colors = {'recovery':'#6b6960','easy':'#0f6e56','aerobic':'#185fa5','threshold':'#854f0b','max':'#a32d2d'} %}
 
 {# ── NO DATA STATE ─────────────────────────────────────────────────────────── #}
-{% if not runs and not is_new_user %}
-<div style="background:var(--c-amber-bg);border-left:3px solid #ef9f27;border-radius:0 var(--radius) var(--radius) 0;padding:1rem;margin-bottom:1rem;">
-  <div style="font-size:15px;font-weight:600;color:var(--c-amber);margin-bottom:4px;">No activity data yet</div>
-  <div style="font-size:13px;color:var(--c-muted);">Tap ↻ Sync in the top right to fetch your latest Garmin runs.</div>
-</div>
-{% endif %}
-
 {% if is_new_user %}
 <div style="background:var(--c-teal-bg);border-left:3px solid var(--c-teal);border-radius:0 var(--radius) var(--radius) 0;padding:1rem;margin-bottom:1rem;">
   <div style="font-size:15px;font-weight:600;color:var(--c-teal);margin-bottom:4px;">Welcome to Running Coach</div>
@@ -23,9 +16,12 @@
 {% if not no_runs %}
 
 {# ── RUNNER HEADER ──────────────────────────────────────────────────────────── #}
-<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1rem;gap:8px;">
+<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:0.75rem;gap:8px;">
   <div>
-    <div style="font-size:13px;color:var(--c-muted);">{{ profile.name }} · {{ personal_stats.total_runs or 0 }} runs · {{ personal_stats.total_km or 0 }} km total</div>
+    <div style="font-size:13px;color:var(--c-muted);">
+      {{ profile.name }} · {{ personal_stats.total_runs or 0 }} runs · {{ personal_stats.total_km or 0 }} km total
+      {% if not runs %}<span style="color:var(--c-amber);"> · tap Sync to load</span>{% endif %}
+    </div>
     <div style="display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap;">
       <span style="font-size:12px;font-weight:600;padding:2px 10px;border-radius:10px;background:var(--c-teal-bg);color:var(--c-teal);">
         {{ profile.fitness_level.value|capitalize }}
@@ -195,19 +191,19 @@
     {% endif %}
   </div>
 
-  {# HRV and body battery context #}
-  {% if watch_health %}
+  {# HRV and body battery context — only show if there is actual data #}
+  {% if watch_health and (watch_health.hrv_ms or watch_health.body_battery is not none) %}
   <div style="margin:8px 0;padding:8px 10px;background:var(--c-bg);border-radius:var(--radius-sm);font-size:12px;color:var(--c-muted);line-height:1.6;">
     {% if watch_health.hrv_ms %}
     <span>HRV {{ watch_health.hrv_ms|int }} ms</span>
-    {% if watch_health.hrv_ms < 35 %} — <span style="color:var(--c-amber);">below typical range, keep effort easy</span>
-    {% elif watch_health.hrv_ms > 55 %} — <span style="color:var(--c-teal);">good recovery signal</span>
-    {% else %} — <span>normal range</span>{% endif %}
+    {% if watch_health.hrv_ms < 35 %} — <span style="color:var(--c-amber);">below typical, keep effort easy</span>
+    {% elif watch_health.hrv_ms > 55 %} — <span style="color:var(--c-teal);">good recovery</span>
+    {% else %} — <span>normal</span>{% endif %}
     {% endif %}
     {% if watch_health.body_battery is not none %}
     {% if watch_health.hrv_ms %} · {% endif %}
     Battery {{ watch_health.body_battery|int }}
-    {% if watch_health.body_battery < 40 %} — <span style="color:var(--c-red);">consider resting instead</span>{% endif %}
+    {% if watch_health.body_battery < 40 %} — <span style="color:var(--c-red);">consider rest</span>{% endif %}
     {% endif %}
   </div>
   {% endif %}
