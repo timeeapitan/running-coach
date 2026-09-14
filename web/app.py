@@ -39,12 +39,8 @@ _MODEL_CACHE = {}
 _GARMIN_RATE_LIMITED_UNTIL = None
 _GARMIN_RATE_LIMIT_SECONDS = 300  # 5 min backoff after any 429
 
-# Set rate limit at startup to prevent immediate Garmin fetch after restart/crash.
-# This gives the process time to stabilise before hitting the API.
-# Cleared after 60 seconds so first user Sync still works quickly.
-import time as _time
-_GARMIN_RATE_LIMITED_UNTIL = datetime.now() + __import__('datetime').timedelta(seconds=60)
-print("[STARTUP] 60s Garmin cooldown set to prevent post-restart 429", flush=True)
+# Do not impose a startup cooldown. The first authenticated dashboard load is
+# allowed to fetch today's health/recovery metrics once, then the app uses DB cache.
 
 def _garmin_is_rate_limited() -> bool:
     global _GARMIN_RATE_LIMITED_UNTIL
@@ -76,8 +72,8 @@ def _prewarm_garmin():
     except Exception as e:
         print(f"[STARTUP] Garmin pre-warm skipped: {e}", flush=True)
 
-with app.app_context():
-    _prewarm_garmin()
+# DB-first mode: do not contact Garmin during application startup.
+# Garmin connection/import code remains available only when explicitly invoked.
 
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
@@ -399,9 +395,12 @@ def _merge_watch_feedback(uid, feedback, force=False, auto_fetch=False):
     existing = feedback.get(key)
     fb = existing or ManualFeedback(date=datetime.combine(today, datetime.min.time()))
     changed = False
-    for attr in ("sleep_hours", "sleep_quality", "hrv_ms"):
+    for attr in ("sleep_hours", "sleep_quality", "hrv_ms", "resting_hr", "body_battery", "stress"):
         val = watch.get(attr)
-        if val is not None and getattr(fb, attr, None) is None:
+        # These are watch-owned recovery fields. If an explicit Garmin refresh
+        # returns a newer value, update today's cached feedback as well. Manual
+        # mood/RPE/pain/notes remain untouched.
+        if val is not None and getattr(fb, attr, None) != val:
             setattr(fb, attr, val)
             changed = True
     feedback[key] = fb
@@ -503,13 +502,13 @@ def dashboard():
     if not profile:
         return redirect(url_for("setup"))
 
-    # Dashboard is the only normal page that may auto-sync.
-    # If today's cache is missing, this fetches Garmin once and saves cache.
-    # Later visits today read from runs_cache/daily_cache instantly.
-    # Auto-fetch once per day — fails fast on 429 (no blocking retries), serves cache silently
-    runs     = _load_runs(uid, auto_fetch=True)
+    # Fetch today's watch health once on the first dashboard load of the day so
+    # sleep/HRV/recovery inputs are fresh. save_cached_watch_health() persists
+    # the result in daily_cache; later dashboard/recommendation loads are DB-only.
+    # Running history stays DB-first here to avoid an additional Garmin request.
     feedback = load_feedback(uid)
     feedback, watch_health = _merge_watch_feedback(uid, feedback, auto_fetch=True)
+    runs     = _load_runs(uid, auto_fetch=False)
     coach    = _get_coach(uid, profile)
     schedule = load_schedule(uid)
 
@@ -568,10 +567,23 @@ def dashboard():
 
     from running_coach.analysis.daily_summary import build_daily_summary
 
-    # Try to load today's cached summary first
+    # Reuse today's summary only if it is at least as fresh as the latest
+    # Garmin health cache. A new morning/explicit health sync must immediately
+    # flow into the briefing and recovery gate.
     summary = load_cached_summary(uid)
-    if summary is None:
-        # Not cached yet today — compute and store it
+    raw_daily = load_daily_cache_raw(uid) or {}
+    health_cached_at = raw_daily.get("health_cached_at")
+    summary_cached_at = raw_daily.get("summary_cached_at")
+    summary_stale = summary is None
+    if health_cached_at:
+        try:
+            health_dt = datetime.fromisoformat(str(health_cached_at).replace("Z", "+00:00")).replace(tzinfo=None)
+            summary_dt = (datetime.fromisoformat(str(summary_cached_at).replace("Z", "+00:00")).replace(tzinfo=None)
+                          if summary_cached_at else None)
+            summary_stale = summary_stale or summary_dt is None or health_dt > summary_dt
+        except Exception:
+            summary_stale = True
+    if summary_stale:
         summary = build_daily_summary(runs, profile, analysis, rec, feedback)
         save_cached_summary(uid, summary)
 
@@ -779,7 +791,8 @@ def refresh_summary():
         except Exception:
             pass
 
-    # v2 cache is append-only; force=True fetches Garmin but does not wipe existing history.
+    # Explicit Sync can still force a fresh Garmin import. The dashboard itself
+    # only auto-fetches today's health once, then reuses daily_cache.
     runs     = _load_runs(uid, force=True)
     feedback = load_feedback(uid)
     feedback, watch_health = _merge_watch_feedback(uid, feedback, force=True)

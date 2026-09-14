@@ -45,6 +45,8 @@ class CoachingRules:
                 "Your fatigue is high — downgraded to easy even though you planned something harder.")
 
         if workout_type == WorkoutType.LONG_RUN:
+            if datetime.now().weekday() not in tuple(self.profile.long_run_days):
+                return self._moderate_run(analysis, runs)
             return self._long_run(analysis, runs)
         elif workout_type == WorkoutType.TEMPO:
             # Only allow tempo if readiness is sufficient
@@ -155,6 +157,7 @@ class CoachingRules:
         km      = self._target_distance(analysis, factor=0.75)
         terrain = self._terrain_label(runs)
         pace_f  = self._terrain_pace_factor(runs)
+        km      = self._cap_weekday_distance(km, 7.0 * pace_f)
         steps   = self._easy_steps(km, terrain)
         return WorkoutRecommendation(
             workout_type=WorkoutType.EASY,
@@ -175,6 +178,7 @@ class CoachingRules:
         km      = self._target_distance(analysis, factor=1.0)
         terrain = self._terrain_label(runs)
         pace_f  = self._terrain_pace_factor(runs)
+        km      = self._cap_weekday_distance(km, 6.0 * pace_f)
         steps   = self._moderate_steps(km, terrain)
         return WorkoutRecommendation(
             workout_type=WorkoutType.MODERATE,
@@ -198,8 +202,9 @@ class CoachingRules:
         days_since_long   = self._days_since_workout_type(runs, WorkoutType.LONG_RUN)
         days_since_tempo  = self._days_since_workout_type(runs, WorkoutType.TEMPO)
 
-        # Long run: aim for once per week, at least 5 days since last one
-        if self._should_do_long_run(analysis, days_since_long):
+        # Long run: aim for once per week, but only on the runner's allowed long-run days.
+        if (datetime.now().weekday() in tuple(self.profile.long_run_days)
+                and self._should_do_long_run(analysis, days_since_long)):
             return self._long_run(analysis, runs)
 
         # Intervals: advanced/elite only, at least 4 days since last hard session
@@ -222,6 +227,7 @@ class CoachingRules:
         km      = self._target_distance(analysis, factor=0.65)
         terrain = self._terrain_label(runs)
         pace_f  = self._terrain_pace_factor(runs)
+        km      = self._cap_weekday_distance(km, 5.2 * pace_f)
         steps   = self._tempo_steps(km, terrain)
         pace_hint = ""
         if self.profile.threshold_pace_min_per_km:
@@ -386,6 +392,14 @@ class CoachingRules:
             return False
         # If we've never done a long run, or it's been 5+ days, recommend one
         return days_since_long is None or days_since_long >= 5
+
+    def _cap_weekday_distance(self, km: float, pace_min_per_km: float) -> float:
+        """Keep weekday morning sessions within the runner's configured time budget."""
+        if datetime.now().weekday() in tuple(self.profile.long_run_days):
+            return km
+        max_minutes = max(20, int(self.profile.weekday_max_duration_minutes))
+        capped = min(km, max_minutes / max(0.1, pace_min_per_km))
+        return round(max(3.0, capped) * 2) / 2
 
     def _target_distance(self, analysis: AnalysisResult, factor: float = 1.0) -> float:
         weekly      = analysis.average_weekly_volume_km

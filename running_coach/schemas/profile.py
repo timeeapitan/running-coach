@@ -25,6 +25,8 @@ class RunnerProfile:
     fitness_level: FitnessLevel = FitnessLevel.INTERMEDIATE
     runs_per_week: int = 3
     goal_weekly_km: Optional[float] = None
+    weekday_max_duration_minutes: int = 45
+    long_run_days: Tuple[int, ...] = (5, 6)  # Saturday, Sunday (datetime.weekday)
 
     # Personal pace benchmarks (min/km) — filled in from your actual runs
     easy_pace_min_per_km: Optional[float] = None

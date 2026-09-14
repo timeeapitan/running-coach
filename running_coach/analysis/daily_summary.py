@@ -83,12 +83,21 @@ def _recovery_context(
         if today_fb.pain_flag:
             min_rest_days = max(min_rest_days, 2)
             reasons.append("pain was logged")
-        if today_fb.sleep_quality is not None and today_fb.sleep_quality <= 2:
+        if today_fb.sleep_hours is not None and today_fb.sleep_hours < 5.5:
+            min_rest_days = max(min_rest_days, 1)
+            reasons.append("short sleep")
+        elif today_fb.sleep_quality is not None and today_fb.sleep_quality <= 2:
             min_rest_days = max(min_rest_days, 1)
             reasons.append("low sleep quality")
         if today_fb.hrv_ms is not None and today_fb.hrv_ms < 35:
             min_rest_days = max(min_rest_days, 1)
             reasons.append("low HRV")
+        if today_fb.body_battery is not None and today_fb.body_battery <= 20:
+            min_rest_days = max(min_rest_days, 1)
+            reasons.append("low Body Battery")
+        if today_fb.stress is not None and today_fb.stress >= 75:
+            min_rest_days = max(min_rest_days, 1)
+            reasons.append("high stress")
 
     if not reasons:
         reasons.append("recent training load")

@@ -21,8 +21,11 @@ class ManualFeedback:
     sleep_hours: Optional[float] = None
     sleep_quality: Optional[int] = None # 1-5
 
-    # HRV — morning measurement (ms), from Garmin/watch morning report
+    # Garmin/watch recovery metrics — populated automatically when available
     hrv_ms: Optional[float] = None      # e.g. 52.0 ms
+    resting_hr: Optional[float] = None  # bpm
+    body_battery: Optional[float] = None # Garmin 0-100
+    stress: Optional[float] = None      # Garmin average stress, typically 0-100
 
     # Pain / injury flags
     pain_flag: bool = False
@@ -41,5 +44,11 @@ class ManualFeedback:
             raise ValueError("sleep_hours must be between 0 and 24")
         if self.hrv_ms is not None and self.hrv_ms < 0:
             raise ValueError("hrv_ms must be non-negative")
+        if self.resting_hr is not None and not (20 <= self.resting_hr <= 250):
+            raise ValueError("resting_hr must be between 20 and 250")
+        if self.body_battery is not None and not (0 <= self.body_battery <= 100):
+            raise ValueError("body_battery must be between 0 and 100")
+        if self.stress is not None and not (0 <= self.stress <= 100):
+            raise ValueError("stress must be between 0 and 100")
         if self.pain_flag and not self.pain_location:
             self.pain_location = "unspecified"

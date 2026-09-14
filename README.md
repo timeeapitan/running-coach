@@ -32,3 +32,9 @@ If you want a clean Garmin-only start, run the DROP statements at the top of `we
 - `runs_cache` — one row per run, upserted by `(username, activity_id)`.
 - `daily_cache` — one row per user/day with coach summary and watch metrics.
 - `feedback` — optional manual pain/soreness/free notes.
+
+## Garmin recovery-aware recommendations
+
+The dashboard performs one automatic Garmin health sync for the current day when today's watch-health cache is missing. The fetched recovery metrics are stored in `daily_cache`/feedback and subsequent recommendation calculations use the database rather than making extra Garmin calls. An explicit Sync/Refresh may fetch newer values.
+
+Recommendations now consider sleep duration, HRV, resting heart rate trend, Body Battery and Garmin stress when those values are available. Poor recovery can lower readiness and can conservatively downgrade a quality/long session to easy or recovery. Missing watch metrics are ignored rather than treated as poor recovery.
