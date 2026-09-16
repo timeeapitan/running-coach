@@ -114,10 +114,15 @@ class RunningCoach:
         self._inject_ml_models()
 
         rec = self.predictor.predict(runs, analysis, feedback)
-        # Inject run steps from rules if predictor didn't set them
+        # Inject steps for the *same workout type* selected by the predictor.
+        # Using rules.recommend() here could choose a different type (e.g. aerobic)
+        # and produce a contradictory breakdown for a tempo recommendation.
         if not rec.steps:
-            rec.steps = self.rules.recommend(analysis, runs).steps
-            rec.terrain = self.rules._terrain_label(runs)
+            typed_rec = self.rules.recommend_specific_type(
+                analysis, runs, rec.workout_type
+            )
+            rec.steps = typed_rec.steps
+            rec.terrain = typed_rec.terrain
         return rec
 
     def log_run(

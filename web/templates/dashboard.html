@@ -156,7 +156,7 @@
     {% if recommendation.target_duration_minutes %}
     <div class="target-item">
       <div class="target-label">Duration</div>
-      <div class="target-value">~{{ recommendation.target_duration_minutes|int }} min</div>
+      <div class="target-value">~{{ recommendation.target_duration_minutes|round|int }} min</div>
     </div>
     {% endif %}
 
@@ -183,9 +183,12 @@
     {# Approximate pace #}
     {% if recommendation.target_distance_km and recommendation.target_duration_minutes %}
     {% set pace = recommendation.target_duration_minutes / recommendation.target_distance_km %}
+    {% set pace_total_seconds = (pace * 60)|round|int %}
+    {% set pace_minutes = pace_total_seconds // 60 %}
+    {% set pace_seconds = pace_total_seconds % 60 %}
     <div class="target-item">
       <div class="target-label">Approx. pace</div>
-      <div class="target-value">~{{ pace|int }}:{{ "%02d"|format(((pace % 1) * 60)|int) }}/km</div>
+      <div class="target-value">~{{ pace_minutes }}:{{ "%02d"|format(pace_seconds) }}/km</div>
       <div style="font-size:11px;color:var(--c-muted);margin-top:1px;">HR zone is the real guide</div>
     </div>
     {% endif %}
