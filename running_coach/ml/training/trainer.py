@@ -155,6 +155,37 @@ class ModelTrainer:
                 results[name] = False
         return results
 
+    def export_bundle(self) -> Dict:
+        """Serialize all trained models for persistent storage (e.g. Supabase)."""
+        return {
+            "version": 1,
+            "models": {
+                "fatigue": self.fatigue_predictor.to_payload(),
+                "pace": self.pace_predictor.to_payload(),
+                "workout": self.workout_recommender.to_payload(),
+            },
+        }
+
+    def import_bundle(self, bundle: Optional[Dict]) -> Dict[str, bool]:
+        """Restore models from a database bundle without touching local disk."""
+        models = (bundle or {}).get("models", {})
+        results = {}
+        for name, model in [
+            ("fatigue", self.fatigue_predictor),
+            ("pace", self.pace_predictor),
+            ("workout", self.workout_recommender),
+        ]:
+            payload = models.get(name)
+            if payload and payload.get("is_trained"):
+                try:
+                    model.load_payload(payload)
+                    results[name] = True
+                except Exception:
+                    results[name] = False
+            else:
+                results[name] = False
+        return results
+
     def training_summary(self) -> str:
         lines = ["ML Model Status", "─" * 30]
         for name, model in [

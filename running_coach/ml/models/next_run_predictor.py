@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 from math import exp
 from typing import Dict, List, Optional, Tuple
 
+from ...coaching.adaptive_planner import AdaptiveTrainingPlanner
+
 from ...schemas import (
     AnalysisResult,
     ManualFeedback,
@@ -42,6 +44,7 @@ class NextRunPredictor:
 
     def __init__(self, profile: RunnerProfile):
         self.profile = profile
+        self.planner = AdaptiveTrainingPlanner()
 
     def predict(
         self,
@@ -92,15 +95,18 @@ class NextRunPredictor:
         ml_source.append("type:ML+rules" if ml_intensity is not None else "type:rules")
 
         # --- Step 5: distance — depends on the selected workout type ---
+        progression = self.planner.state(runs)
         if wtype == WorkoutType.LONG_RUN:
-            weekly = analysis.average_weekly_volume_km or (baseline_dist * max(1, self.profile.runs_per_week))
-            target_dist = max(8.0, weekly * 0.30)
+            target_dist = self.planner.long_run_target(runs, baseline_dist)
         elif wtype in (WorkoutType.TEMPO, WorkoutType.INTERVAL):
             target_dist = baseline_dist * min(scale, 1.0) * 0.80
         elif wtype in (WorkoutType.EASY, WorkoutType.RECOVERY):
             target_dist = baseline_dist * min(scale, 0.85)
         else:
             target_dist = baseline_dist * scale
+
+        if progression.continuity in ("interrupted", "returning"):
+            target_dist *= progression.volume_multiplier
 
         recent_max = self._recent_max_distance(runs, days=14)
         if recent_max and target_dist > recent_max * 1.10:
@@ -124,6 +130,12 @@ class NextRunPredictor:
         rationale = self._build_rationale(
             analysis, baseline_dist, target_dist, scale, runs, ml_source
         )
+        if progression.days_since_last_run is not None and progression.days_since_last_run >= 7:
+            rationale += (f" It has been {progression.days_since_last_run} days since your last run, "
+                          "so intensity and volume are intentionally reduced for a gradual return.")
+        elif wtype == WorkoutType.LONG_RUN:
+            rationale += (f" Long-run distance progresses from your demonstrated recent capacity "
+                          f"({progression.recent_longest_km:.1f} km) rather than a fixed end goal.")
 
         return WorkoutRecommendation(
             workout_type=wtype,
@@ -261,6 +273,16 @@ class NextRunPredictor:
         runs = runs or []
         r = analysis.readiness_score
         f = analysis.fatigue_score
+
+        # Training continuity is different from recovery. After a long break a
+        # runner can have excellent Garmin readiness while still needing an easy
+        # re-entry session. This guard therefore runs before quality selection.
+        progression = self.planner.state(runs)
+        if progression.days_since_last_run is not None:
+            if progression.days_since_last_run >= 14:
+                return Intensity.EASY, "easy", WorkoutType.EASY
+            if progression.days_since_last_run >= 7:
+                return Intensity.MODERATE, "aerobic", WorkoutType.MODERATE
 
         # Safety always overrides variety or ML.
         if f >= 70 or r < 35:

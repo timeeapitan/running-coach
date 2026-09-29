@@ -534,3 +534,40 @@ def _file_save_schedule(username: str, schedule: dict):
     p = os.path.join(_udir(username), "schedule.json")
     with open(p, "w") as f:
         json.dump(schedule, f, indent=2)
+
+# ── Persistent ML model state ────────────────────────────────────────────────
+
+def load_ml_model_bundle(username: str) -> Optional[dict]:
+    """Load the user's latest ML bundle. Supabase is authoritative in production."""
+    if not USE_DB:
+        p = os.path.join(_udir(username), "ml_models.json")
+        return json.load(open(p)) if os.path.exists(p) else None
+    rows = _sb_get(
+        "ml_models",
+        f"?username=eq.{urllib.parse.quote(str(username))}&select=model_bundle,trained_run_count,trained_at&limit=1",
+    )
+    if not rows:
+        return None
+    bundle = _json(rows[0].get("model_bundle"), {}) or {}
+    bundle["trained_run_count"] = rows[0].get("trained_run_count") or bundle.get("trained_run_count", 0)
+    bundle["trained_at"] = rows[0].get("trained_at") or bundle.get("trained_at")
+    return bundle
+
+
+def save_ml_model_bundle(username: str, bundle: dict, trained_run_count: int) -> None:
+    """Persist learned model parameters so Render's ephemeral disk is irrelevant."""
+    now = datetime.utcnow().isoformat()
+    payload_bundle = dict(bundle or {})
+    payload_bundle["trained_run_count"] = int(trained_run_count)
+    payload_bundle["trained_at"] = now
+    if not USE_DB:
+        with open(os.path.join(_udir(username), "ml_models.json"), "w") as f:
+            json.dump(payload_bundle, f, indent=2)
+        return
+    _sb_upsert("ml_models", {
+        "username": username,
+        "model_bundle": payload_bundle,
+        "trained_run_count": int(trained_run_count),
+        "trained_at": now,
+        "updated_at": now,
+    }, "username")

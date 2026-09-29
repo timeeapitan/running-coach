@@ -20,7 +20,7 @@ from web.db import (
     load_cached_summary, save_cached_summary, load_daily_cache_raw,
     load_cached_runs, save_cached_runs, invalidate_runs_cache,
     load_cached_watch_health, save_cached_watch_health, invalidate_watch_health_cache, mark_sync_failed,
-    load_schedule, save_schedule,
+    load_schedule, save_schedule, load_ml_model_bundle, save_ml_model_bundle,
 )
 from running_coach.schemas.profile  import RunnerProfile
 from running_coach.schemas.feedback import ManualFeedback
@@ -413,7 +413,40 @@ def _merge_watch_feedback(uid, feedback, force=False, auto_fetch=False):
     return feedback, watch
 
 def _get_coach(uid, profile):
-    return RunningCoach(profile, model_dir=_get_model_dir(uid))
+    coach = RunningCoach(profile, model_dir=_get_model_dir(uid))
+    # Production persistence is Supabase, not Render's ephemeral filesystem.
+    try:
+        bundle = load_ml_model_bundle(uid)
+        if bundle:
+            coach.trainer.import_bundle(bundle)
+            coach._inject_ml_models()
+    except Exception as e:
+        print("[ML] Supabase model load failed; using local/fallback models:", repr(e), flush=True)
+    return coach
+
+def _train_and_persist_if_needed(uid, coach, runs, feedback):
+    """Retrain only when useful new data exists, then persist learned state."""
+    if len(runs) < coach.trainer.MIN_RUNS_TO_TRAIN:
+        return False
+    try:
+        bundle = load_ml_model_bundle(uid) or {}
+        trained_count = int(bundle.get("trained_run_count") or 0)
+        # Train initially, then after at least 3 genuinely new runs. This avoids
+        # expensive retraining on every page load while still learning over time.
+        any_trained = any([
+            coach.trainer.fatigue_predictor.is_trained,
+            coach.trainer.pace_predictor.is_trained,
+            coach.trainer.workout_recommender.is_trained,
+        ])
+        if any_trained and len(runs) < trained_count + 3:
+            return False
+        coach.train_models(runs, feedback)
+        save_ml_model_bundle(uid, coach.trainer.export_bundle(), len(runs))
+        print(f"[ML] trained and persisted to Supabase at {len(runs)} runs", flush=True)
+        return True
+    except Exception as e:
+        print("[ML] training/persistence skipped:", repr(e), flush=True)
+        return False
 
 def _require_profile(uid):
     """
@@ -542,10 +575,10 @@ def dashboard():
         if _lcr(uid):
             sync_rate_limited = True  # cache has data but fetch failed
 
-    # ML training disabled — uses too much memory on Render free tier (512MB limit)
-    # Re-enable when running on a paid plan with more memory
-    # if len(runs) >= 10 and not coach.trainer.fatigue_predictor.is_trained:
-    #     coach.train_models(runs)
+    # Learn from accumulated runs, but persist the learned model in Supabase.
+    # Retraining is throttled (initially at 10 runs, then every 3 new runs), so
+    # ordinary dashboard loads only deserialize the small stored model bundle.
+    _train_and_persist_if_needed(uid, coach, runs, feedback)
 
     # Auto-detect fitness level (only when we have data)
     fitness_result = {"changed": False, "reason": "", "level": profile.fitness_level}

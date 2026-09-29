@@ -38,3 +38,9 @@ If you want a clean Garmin-only start, run the DROP statements at the top of `we
 The dashboard performs one automatic Garmin health sync for the current day when today's watch-health cache is missing. The fetched recovery metrics are stored in `daily_cache`/feedback and subsequent recommendation calculations use the database rather than making extra Garmin calls. An explicit Sync/Refresh may fetch newer values.
 
 Recommendations now consider sleep duration, HRV, resting heart rate trend, Body Battery and Garmin stress when those values are available. Poor recovery can lower readiness and can conservatively downgrade a quality/long session to easy or recovery. Missing watch metrics are ignored rather than treated as poor recovery.
+
+## Adaptive continuous coaching
+
+The next-run engine now uses an `AdaptiveTrainingPlanner` in addition to the existing ML/EWMA predictor and Garmin recovery logic. There is no hard-coded 10K end goal: demonstrated recent capacity becomes a moving long-run target. Consistent training allows gentle progression; 7+ day interruptions reduce intensity, and 14+ day breaks trigger an easy return-to-running session before quality work resumes.
+
+Garmin recovery inputs remain DB-first after sync. Sleep duration, HRV, Body Battery, stress and resting HR are also exposed as ML features, so trained personal models can learn from recovery context. Coaching constraints remain the final safety/schedule layer (e.g. weekend-only long runs and weekday duration limits).

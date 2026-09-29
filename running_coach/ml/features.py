@@ -40,6 +40,10 @@ def extract_features(
     sleep_vals = [fb.sleep_quality for fb in recent_fb if fb.sleep_quality is not None]
     mood_vals  = [fb.mood  for fb in recent_fb if fb.mood  is not None]
     hrv_vals   = [fb.hrv_ms for fb in recent_fb if fb.hrv_ms is not None]
+    sleep_hours_vals = [fb.sleep_hours for fb in recent_fb if fb.sleep_hours is not None]
+    body_battery_vals = [fb.body_battery for fb in recent_fb if fb.body_battery is not None]
+    stress_vals = [fb.stress for fb in recent_fb if fb.stress is not None]
+    resting_hr_vals = [fb.resting_hr for fb in recent_fb if fb.resting_hr is not None]
 
     # HRV: ratio of today's reading vs 7-day baseline
     all_hrv = [fb.hrv_ms for fb in feedback.values()
@@ -76,6 +80,11 @@ def extract_features(
         # HRV — the most important recovery signal
         "hrv_ratio":            hrv_ratio,        # >1 = above baseline (good), <1 = below (tired)
         "hrv_available":        1.0 if hrv_vals else 0.0,
+        # Garmin recovery features (DB-cached before feature extraction)
+        "sleep_hours_7d":       (sum(sleep_hours_vals) / len(sleep_hours_vals)) if sleep_hours_vals else 0.0,
+        "body_battery_7d":      (sum(body_battery_vals) / len(body_battery_vals)) if body_battery_vals else 0.0,
+        "stress_7d":            (sum(stress_vals) / len(stress_vals)) if stress_vals else 0.0,
+        "resting_hr_7d":        (sum(resting_hr_vals) / len(resting_hr_vals)) if resting_hr_vals else 0.0,
         # Pain flag
         "pain_flag_recent":     float(any(fb.pain_flag for fb in recent_fb)),
         # Profile

@@ -147,3 +147,23 @@ create table if not exists weekly_schedule (
 alter table weekly_schedule enable row level security;
 create policy "service role full access on weekly_schedule"
   on weekly_schedule for all using (true);
+
+-- Persistent per-user ML state. This makes model learning survive Render
+-- restarts/redeploys; Render's local filesystem is never authoritative.
+create table if not exists ml_models (
+  username           text primary key references users(username) on delete cascade,
+  model_bundle       jsonb not null default '{}'::jsonb,
+  trained_run_count  integer not null default 0,
+  trained_at         timestamptz,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now()
+);
+
+alter table ml_models enable row level security;
+drop policy if exists "service role full access on ml_models" on ml_models;
+create policy "service role full access on ml_models"
+  on ml_models for all using (true) with check (true);
+
+drop trigger if exists ml_models_updated_at on ml_models;
+create trigger ml_models_updated_at before update on ml_models
+for each row execute function update_updated_at();

@@ -72,6 +72,21 @@ class BaseMLModel(ABC):
         self._state     = payload.get("state", {})
         self._restore_from_state()
 
+    def to_payload(self) -> Dict[str, Any]:
+        """Return a JSON-safe representation suitable for database persistence."""
+        return {
+            "class": type(self).__name__,
+            "is_trained": self.is_trained,
+            "state": self._state,
+        }
+
+    def load_payload(self, payload: Dict[str, Any]) -> None:
+        """Restore model state directly from a JSON/database payload."""
+        payload = payload or {}
+        self.is_trained = bool(payload.get("is_trained", False))
+        self._state = payload.get("state", {}) or {}
+        self._restore_from_state()
+
     def _restore_from_state(self) -> None:
         """Called after load() — subclasses override to rebuild internal objects."""
 
